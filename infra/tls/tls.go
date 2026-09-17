@@ -11,10 +11,12 @@ import (
 	"github.com/webitel/webitel-emails/config"
 )
 
+// Config contains the optional server-side TLS configuration for gRPC.
 type Config struct {
 	Server *cryptotls.Config
 }
 
+// New builds the gRPC TLS configuration when certificate verification is enabled.
 func New(cfg *config.Config) (*Config, error) {
 	connection := cfg.Service.Connection
 	if !connection.VerifyCerts {

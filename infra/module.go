@@ -4,6 +4,7 @@ package infra
 import (
 	"go.uber.org/fx"
 
+	authinfra "github.com/webitel/webitel-emails/infra/auth"
 	servicediscovery "github.com/webitel/webitel-emails/infra/discovery"
 	"github.com/webitel/webitel-emails/infra/logging"
 	"github.com/webitel/webitel-emails/infra/postgres"
@@ -14,6 +15,7 @@ import (
 
 var Module = fx.Module(
 	"infra",
+	authinfra.Module,
 	logging.Module,
 	postgres.Module,
 	pubsub.Module,

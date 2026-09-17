@@ -14,11 +14,13 @@ import (
 
 const schemaVersionTable = "email_service_schema_version"
 
+// Migrator applies the SQL migrations embedded in the service binary.
 type Migrator struct {
 	provider *goose.Provider
 	log      *slog.Logger
 }
 
+// NewMigrator creates a Goose migration provider over the shared database connection.
 func NewMigrator(db *sql.DB, log *slog.Logger) (*Migrator, error) {
 	store, err := database.NewStore(database.DialectPostgres, schemaVersionTable)
 	if err != nil {
@@ -40,6 +42,7 @@ func NewMigrator(db *sql.DB, log *slog.Logger) (*Migrator, error) {
 	return &Migrator{provider: provider, log: log}, nil
 }
 
+// Run applies all pending migrations in version order.
 func (m *Migrator) Run(ctx context.Context) error {
 	results, err := m.provider.Up(ctx)
 	if err != nil {

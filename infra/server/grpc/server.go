@@ -13,11 +13,16 @@ import (
 	"google.golang.org/grpc/health"
 	healthgrpc "google.golang.org/grpc/health/grpc_health_v1"
 
+	kitinterceptors "github.com/webitel/webitel-go-kit/pkg/interceptors"
+
 	"github.com/webitel/webitel-emails/config"
+	"github.com/webitel/webitel-emails/infra/server/grpc/interceptors"
 	infratls "github.com/webitel/webitel-emails/infra/tls"
+	"github.com/webitel/webitel-emails/internal/auth"
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
+// Server owns the internal gRPC server, listener, and health service.
 type Server struct {
 	*grpc.Server
 
@@ -26,13 +31,25 @@ type Server struct {
 	log      *slog.Logger
 }
 
-func New(cfg *config.Config, log *slog.Logger, tlsConfig *infratls.Config, lifecycle fx.Lifecycle) (*Server, error) {
+// New creates the gRPC server and binds its start and graceful stop to Fx.
+func New(
+	cfg *config.Config,
+	log *slog.Logger,
+	tlsConfig *infratls.Config,
+	authManager auth.Manager,
+	lifecycle fx.Lifecycle,
+) (*Server, error) {
 	listener, err := net.Listen("tcp", cfg.Service.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("grpc server: listen on %s: %w", cfg.Service.Addr, err)
 	}
 
-	options := make([]grpc.ServerOption, 0, 1)
+	options := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			kitinterceptors.UnaryServerErrorInterceptor(),
+			interceptors.NewUnaryAuthInterceptor(authManager),
+		),
+	}
 	if tlsConfig.Server != nil {
 		options = append(options, grpc.Creds(credentials.NewTLS(tlsConfig.Server.Clone())))
 	}

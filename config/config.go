@@ -10,6 +10,7 @@ import (
 	"github.com/webitel/webitel-go-kit/appconfig"
 )
 
+// Config contains all settings used by the service and migration commands.
 type Config struct {
 	Service  ServiceConfig      `mapstructure:"service"`
 	Log      appconfig.Log      `mapstructure:"log"`
@@ -18,6 +19,7 @@ type Config struct {
 	Pubsub   appconfig.Pubsub   `mapstructure:"pubsub"`
 }
 
+// ServiceConfig contains the gRPC listen address and TLS connection settings.
 type ServiceConfig struct {
 	Addr       string             `mapstructure:"addr"`
 	Connection appconfig.GRPCConn `mapstructure:"conn"`

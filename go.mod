@@ -3,19 +3,28 @@ module github.com/webitel/webitel-emails
 go 1.26
 
 require (
+	buf.build/gen/go/webitel/webitel-go/grpc/go v1.6.2-20260528093848-00aedb783a79.1
+	buf.build/gen/go/webitel/webitel-go/protocolbuffers/go v1.36.12-20260528093848-00aedb783a79.1
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/mbobakov/grpc-consul-resolver v1.5.3
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/pflag v1.0.10
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/webitel/webitel-go-kit/appconfig v0.0.0-20260803090450-fac61ca3df42
+	github.com/webitel/webitel-go-kit/cmd/protoc-gen-go-webitel v0.0.0-20240829153325-0ae7f6059b52
 	github.com/webitel/webitel-go-kit/infra/discovery v0.0.0-20260826083159-429f167cb300
 	github.com/webitel/webitel-go-kit/infra/otel v0.1.0
 	github.com/webitel/webitel-go-kit/infra/pubsub/rabbitmq v0.0.0-20260826083159-429f167cb300
+	github.com/webitel/webitel-go-kit/pkg/errors v0.1.0
+	github.com/webitel/webitel-go-kit/pkg/interceptors v0.1.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.uber.org/fx v1.24.0
+	golang.org/x/sync v0.22.0
+	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478
 	google.golang.org/grpc v1.82.1
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -27,6 +36,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-playground/form v3.1.4+incompatible // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
@@ -42,6 +52,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jpillora/backoff v1.0.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.23 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
@@ -73,11 +84,8 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260718201538-764159d718ef // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
