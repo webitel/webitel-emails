@@ -77,6 +77,13 @@ func emailProfileToProto(profile *model.EmailProfile) *emailpb.EmailProfile {
 	}
 }
 
+func connectionTestResultToProto(result model.EmailConnectionTestResult) *emailpb.EmailConnectionTestResult {
+	return &emailpb.EmailConnectionTestResult{
+		Success: result.Success,
+		Error:   result.Error,
+	}
+}
+
 func authTypeToProto(value model.EmailAuthType) emailpb.EmailAuthType {
 	switch value {
 	case model.EmailAuthTypeBasic:

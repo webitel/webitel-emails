@@ -90,3 +90,15 @@ type EmailProfileFilter struct {
 	Sort   string
 	Fields []string
 }
+
+// EmailConnectionTestResult describes one protocol connection check.
+type EmailConnectionTestResult struct {
+	Success bool
+	Error   string
+}
+
+// EmailProfileTestResult contains independent IMAP and SMTP check results.
+type EmailProfileTestResult struct {
+	IMAP EmailConnectionTestResult
+	SMTP EmailConnectionTestResult
+}

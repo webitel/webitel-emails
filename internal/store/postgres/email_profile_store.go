@@ -192,7 +192,12 @@ func (s *emailProfileStore) List(ctx context.Context, domainID int64, filter mod
 	return profiles, false, nil
 }
 
-func (s *emailProfileStore) Create(ctx context.Context, domainID, userID int64, profile *model.EmailProfile) (*model.EmailProfile, error) {
+func (s *emailProfileStore) Create(
+	ctx context.Context,
+	domainID, userID int64,
+	profile *model.EmailProfile,
+	password []byte,
+) (*model.EmailProfile, error) {
 	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
 
 	const query = `
@@ -212,6 +217,7 @@ INSERT INTO email.profile (
     smtp_port,
     smtp_security,
     username,
+    password,
     mailbox,
     fetch_interval_seconds,
     flow_id,
@@ -222,7 +228,7 @@ INSERT INTO email.profile (
     updated_by
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 )
 RETURNING *`
 
@@ -244,6 +250,7 @@ RETURNING *`
 		profile.SMTPPort,
 		profile.SMTPSecurity,
 		profile.Username,
+		password,
 		mailbox,
 		fetchInterval,
 		nullableInt64(profile.FlowID),
@@ -255,7 +262,12 @@ RETURNING *`
 	)
 }
 
-func (s *emailProfileStore) Update(ctx context.Context, domainID, userID, id int64, profile *model.EmailProfile) (*model.EmailProfile, error) {
+func (s *emailProfileStore) Update(
+	ctx context.Context,
+	domainID, userID, id int64,
+	profile *model.EmailProfile,
+	password []byte,
+) (*model.EmailProfile, error) {
 	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
 
 	const query = `
@@ -274,15 +286,16 @@ UPDATE email.profile SET
     smtp_port = $12,
     smtp_security = $13,
     username = $14,
-    mailbox = $15,
-    fetch_interval_seconds = $16,
-    flow_id = $17,
-    auth_type = $18,
-    oauth_provider = $19,
-    oauth_client_id = $20,
+    password = COALESCE($15, password),
+    mailbox = $16,
+    fetch_interval_seconds = $17,
+    flow_id = $18,
+    auth_type = $19,
+    oauth_provider = $20,
+    oauth_client_id = $21,
     updated_at = now(),
-    updated_by = $21
-WHERE domain_id = $22 AND id = $23
+    updated_by = $22
+WHERE domain_id = $23 AND id = $24
 RETURNING *`
 
 	return s.writeReturning(
@@ -302,6 +315,7 @@ RETURNING *`
 		profile.SMTPPort,
 		profile.SMTPSecurity,
 		profile.Username,
+		password,
 		mailbox,
 		fetchInterval,
 		nullableInt64(profile.FlowID),
@@ -312,6 +326,67 @@ RETURNING *`
 		domainID,
 		id,
 	)
+}
+
+func (s *emailProfileStore) GetPassword(ctx context.Context, domainID, id int64) ([]byte, error) {
+	const query = `SELECT password FROM email.profile WHERE domain_id = $1 AND id = $2`
+
+	var password []byte
+	if err := s.db.QueryRowContext(ctx, query, domainID, id).Scan(&password); err != nil {
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return nil, kiterrors.NotFound(
+				"email profile does not exist or access is denied",
+				kiterrors.WithID("store.email_profile.not_found"),
+				kiterrors.WithCause(err),
+			)
+		}
+
+		return nil, err
+	}
+
+	return password, nil
+}
+
+func (s *emailProfileStore) SetConnectionResult(
+	ctx context.Context,
+	domainID, id int64,
+	state model.EmailConnectionState,
+	connectionError string,
+	successful bool,
+) error {
+	const query = `
+UPDATE email.profile SET
+    connection_state = $1,
+    last_successful_connection_at = CASE
+        WHEN $2 THEN now()
+        ELSE last_successful_connection_at
+    END,
+    connection_error = NULLIF($3, '')
+WHERE domain_id = $4 AND id = $5
+RETURNING id`
+
+	var updatedID int64
+	if err := s.db.QueryRowContext(
+		ctx,
+		query,
+		state,
+		successful,
+		connectionError,
+		domainID,
+		id,
+	).Scan(&updatedID); err != nil {
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return kiterrors.NotFound(
+				"email profile does not exist or access is denied",
+				kiterrors.WithID("store.email_profile.not_found"),
+				kiterrors.WithCause(err),
+			)
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func (s *emailProfileStore) Delete(ctx context.Context, domainID, id int64) (*model.EmailProfile, error) {

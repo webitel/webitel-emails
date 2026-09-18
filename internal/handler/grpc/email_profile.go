@@ -90,6 +90,7 @@ func (s *EmailProfilesServer) CreateEmailProfile(
 		session.DomainID,
 		session.UserID,
 		emailProfileFromProto(req.GetInput()),
+		req.GetInput().GetPassword(),
 	)
 	if err != nil {
 		return nil, err
@@ -117,6 +118,7 @@ func (s *EmailProfilesServer) UpdateEmailProfile(
 		session.UserID,
 		req.GetId(),
 		emailProfileFromProto(req.GetInput()),
+		req.GetInput().GetPassword(),
 	)
 	if err != nil {
 		return nil, err
@@ -144,6 +146,30 @@ func (s *EmailProfilesServer) DeleteEmailProfile(
 	}
 
 	return emailProfileToProto(profile), nil
+}
+
+// TestEmailProfile validates the saved IMAP and SMTP connection settings.
+func (s *EmailProfilesServer) TestEmailProfile(
+	ctx context.Context,
+	req *emailpb.TestEmailProfileRequest,
+) (*emailpb.TestEmailProfileResponse, error) {
+	session, err := emailProfileSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEmailProfileID(req.GetId()); err != nil {
+		return nil, err
+	}
+
+	result, err := s.service.Test(ctx, session.DomainID, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+
+	return &emailpb.TestEmailProfileResponse{
+		Imap: connectionTestResultToProto(result.IMAP),
+		Smtp: connectionTestResultToProto(result.SMTP),
+	}, nil
 }
 
 func emailProfileSession(ctx context.Context) (*auth.Session, error) {

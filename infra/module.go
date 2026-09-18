@@ -5,8 +5,10 @@ import (
 	"go.uber.org/fx"
 
 	authinfra "github.com/webitel/webitel-emails/infra/auth"
+	"github.com/webitel/webitel-emails/infra/crypto"
 	servicediscovery "github.com/webitel/webitel-emails/infra/discovery"
 	"github.com/webitel/webitel-emails/infra/logging"
+	"github.com/webitel/webitel-emails/infra/mail"
 	"github.com/webitel/webitel-emails/infra/postgres"
 	"github.com/webitel/webitel-emails/infra/pubsub"
 	grpcserver "github.com/webitel/webitel-emails/infra/server/grpc"
@@ -16,7 +18,9 @@ import (
 var Module = fx.Module(
 	"infra",
 	authinfra.Module,
+	crypto.Module,
 	logging.Module,
+	mail.Module,
 	postgres.Module,
 	pubsub.Module,
 	tls.Module,
