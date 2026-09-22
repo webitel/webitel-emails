@@ -24,15 +24,26 @@ var (
 	// ErrSMTPAuthNotSupported reports an SMTP server without a supported Basic
 	// authentication mechanism.
 	ErrSMTPAuthNotSupported = errors.New("smtp: Basic authentication is not supported")
+	// ErrSMTPXOAUTH2NotSupported reports an SMTP server that does not
+	// advertise the XOAUTH2 authentication mechanism when the profile
+	// requires it.
+	ErrSMTPXOAUTH2NotSupported = errors.New("smtp: XOAUTH2 is not supported")
 )
 
-// SMTPConnection contains the settings required to validate Basic Auth.
+// SMTPConnection contains the settings required to validate a connection,
+// either with Basic Auth or, for an OAuth2 profile, XOAUTH2.
 type SMTPConnection struct {
 	Host     string
 	Port     int32
 	Security model.EmailConnectionSecurity
 	Username string
 	Password string
+	// AuthType selects Basic (default, including an empty value, matching
+	// model.EmailProfile) or OAuth2 (XOAUTH2) authentication.
+	AuthType model.EmailAuthType
+	// AccessToken is the OAuth2 bearer token used for XOAUTH2 when AuthType
+	// is EmailAuthTypeOAuth2. It is ignored otherwise.
+	AccessToken string
 }
 
 // SMTPClient validates an SMTP connection without sending a message.
@@ -119,22 +130,38 @@ func smtpAuth(client *smtp.Client, connection SMTPConnection) (smtp.Auth, error)
 		return nil, ErrSMTPAuthNotSupported
 	}
 
-	for _, mechanism := range strings.Fields(strings.ToUpper(mechanisms)) {
-		if mechanism == "PLAIN" {
-			return smtp.PlainAuth("", connection.Username, connection.Password, connection.Host), nil
+	if connection.AuthType == model.EmailAuthTypeOAuth2 {
+		if !smtpMechanismSupported(mechanisms, xoauth2Mechanism) {
+			return nil, ErrSMTPXOAUTH2NotSupported
 		}
+
+		return newXOAUTH2SMTPAuth(connection.Username, connection.AccessToken), nil
 	}
-	for _, mechanism := range strings.Fields(strings.ToUpper(mechanisms)) {
-		if mechanism == "LOGIN" {
-			return loginAuth{
-				username: connection.Username,
-				password: connection.Password,
-				host:     connection.Host,
-			}, nil
-		}
+
+	if smtpMechanismSupported(mechanisms, "PLAIN") {
+		return smtp.PlainAuth("", connection.Username, connection.Password, connection.Host), nil
+	}
+	if smtpMechanismSupported(mechanisms, "LOGIN") {
+		return loginAuth{
+			username: connection.Username,
+			password: connection.Password,
+			host:     connection.Host,
+		}, nil
 	}
 
 	return nil, ErrSMTPAuthNotSupported
+}
+
+// smtpMechanismSupported reports whether mechanism is present in the
+// space-separated AUTH mechanism list the server advertised.
+func smtpMechanismSupported(mechanisms, mechanism string) bool {
+	for _, candidate := range strings.Fields(strings.ToUpper(mechanisms)) {
+		if candidate == mechanism {
+			return true
+		}
+	}
+
+	return false
 }
 
 type loginAuth struct {

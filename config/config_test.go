@@ -47,6 +47,8 @@ service:
   addr: yaml:8080
   conn:
     verify_certs: false
+oauth:
+  redirect_url: https://yaml.example.com/oauth/callback
 log:
   level: error
 postgres:
@@ -62,12 +64,14 @@ pubsub:
 	}
 
 	t.Setenv("SERVICE_ADDR", "env:8080")
+	t.Setenv("OAUTH_REDIRECT_URL", "https://env.example.com/oauth/callback")
 	t.Setenv("POSTGRES_DSN", "postgres://env@localhost/webitel")
 	t.Setenv("LOG_LEVEL", "warn")
 
 	cfg, err := LoadServerConfig([]string{
 		"--config_file=" + path,
 		"--service.addr=cli:8080",
+		"--oauth.redirect_url=https://cli.example.com/oauth/callback",
 		"--log.level=debug",
 	})
 	if err != nil {
@@ -79,6 +83,9 @@ pubsub:
 	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("log.level = %q, want CLI value", cfg.Log.Level)
+	}
+	if cfg.OAuth.RedirectURL != "https://cli.example.com/oauth/callback" {
+		t.Errorf("oauth.redirect_url = %q, want CLI value", cfg.OAuth.RedirectURL)
 	}
 	if cfg.Postgres.DSN != "postgres://env@localhost/webitel" {
 		t.Errorf("postgres.dsn = %q, want environment value", cfg.Postgres.DSN)
@@ -161,6 +168,7 @@ func TestConfigValidate(t *testing.T) {
 	}{
 		{name: "valid", mutate: func(*Config) {}},
 		{name: "missing service address", mutate: func(c *Config) { c.Service.Addr = "" }, wantErr: "service.addr"},
+		{name: "invalid OAuth redirect URL", mutate: func(c *Config) { c.OAuth.RedirectURL = "ftp://example.com/callback" }, wantErr: "oauth.redirect_url"},
 		{name: "unsupported log level", mutate: func(c *Config) { c.Log.Level = "trace" }, wantErr: "log.level"},
 		{name: "missing postgres DSN", mutate: func(c *Config) { c.Postgres.DSN = "" }, wantErr: "postgres.dsn"},
 		{name: "missing consul address", mutate: func(c *Config) { c.Consul.Addr = "" }, wantErr: "consul.addr"},
@@ -200,6 +208,7 @@ func clearConfigEnvironment(t *testing.T) {
 		"SERVICE_CONN_CLIENT_CA",
 		"SERVICE_CONN_CLIENT_CERT",
 		"SERVICE_CONN_CLIENT_KEY",
+		"OAUTH_REDIRECT_URL",
 		"LOG_LEVEL",
 		"LOG_JSON",
 		"LOG_OTEL",

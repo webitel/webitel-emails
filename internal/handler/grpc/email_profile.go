@@ -76,10 +76,7 @@ func (s *EmailProfilesServer) LocateEmailProfile(
 }
 
 // CreateEmailProfile creates a profile in the caller's domain.
-func (s *EmailProfilesServer) CreateEmailProfile(
-	ctx context.Context,
-	req *emailpb.CreateEmailProfileRequest,
-) (*emailpb.EmailProfile, error) {
+func (s *EmailProfilesServer) CreateEmailProfile(ctx context.Context, req *emailpb.CreateEmailProfileRequest) (*emailpb.EmailProfile, error) {
 	session, err := emailProfileSession(ctx)
 	if err != nil {
 		return nil, err
@@ -91,6 +88,7 @@ func (s *EmailProfilesServer) CreateEmailProfile(
 		session.UserID,
 		emailProfileFromProto(req.GetInput()),
 		req.GetInput().GetPassword(),
+		req.GetInput().GetOauthClientSecret(),
 	)
 	if err != nil {
 		return nil, err
@@ -119,6 +117,7 @@ func (s *EmailProfilesServer) UpdateEmailProfile(
 		req.GetId(),
 		emailProfileFromProto(req.GetInput()),
 		req.GetInput().GetPassword(),
+		req.GetInput().GetOauthClientSecret(),
 	)
 	if err != nil {
 		return nil, err
@@ -170,6 +169,73 @@ func (s *EmailProfilesServer) TestEmailProfile(
 		Imap: connectionTestResultToProto(result.IMAP),
 		Smtp: connectionTestResultToProto(result.SMTP),
 	}, nil
+}
+
+// BeginEmailProfileOAuth returns the provider authorization URL for a profile.
+func (s *EmailProfilesServer) BeginEmailProfileOAuth(ctx context.Context, req *emailpb.BeginEmailProfileOAuthRequest) (*emailpb.BeginEmailProfileOAuthResponse, error) {
+	session, err := emailProfileSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEmailProfileID(req.GetId()); err != nil {
+		return nil, err
+	}
+
+	result, err := s.service.BeginOAuth(ctx, session.DomainID, session.UserID, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+
+	return &emailpb.BeginEmailProfileOAuthResponse{
+		AuthUrl: result.AuthURL,
+		State:   result.State,
+	}, nil
+}
+
+// CompleteEmailProfileOAuth stores the authorization result for a profile.
+func (s *EmailProfilesServer) CompleteEmailProfileOAuth(ctx context.Context, req *emailpb.CompleteEmailProfileOAuthRequest) (*emailpb.EmailProfile, error) {
+	session, err := emailProfileSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEmailProfileID(req.GetId()); err != nil {
+		return nil, err
+	}
+
+	profile, err := s.service.CompleteOAuth(
+		ctx,
+		session.DomainID,
+		session.UserID,
+		req.GetId(),
+		req.GetCode(),
+		req.GetState(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return emailProfileToProto(profile), nil
+}
+
+// DisconnectEmailProfileOAuth clears a profile's stored OAuth authorization.
+func (s *EmailProfilesServer) DisconnectEmailProfileOAuth(
+	ctx context.Context,
+	req *emailpb.DisconnectEmailProfileOAuthRequest,
+) (*emailpb.EmailProfile, error) {
+	session, err := emailProfileSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEmailProfileID(req.GetId()); err != nil {
+		return nil, err
+	}
+
+	profile, err := s.service.DisconnectOAuth(ctx, session.DomainID, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+
+	return emailProfileToProto(profile), nil
 }
 
 func emailProfileSession(ctx context.Context) (*auth.Session, error) {

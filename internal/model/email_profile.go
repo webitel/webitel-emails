@@ -102,3 +102,9 @@ type EmailProfileTestResult struct {
 	IMAP EmailConnectionTestResult
 	SMTP EmailConnectionTestResult
 }
+
+// EmailProfileOAuthStart contains the provider authorization entry point.
+type EmailProfileOAuthStart struct {
+	AuthURL string
+	State   string
+}

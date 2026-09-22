@@ -192,12 +192,7 @@ func (s *emailProfileStore) List(ctx context.Context, domainID int64, filter mod
 	return profiles, false, nil
 }
 
-func (s *emailProfileStore) Create(
-	ctx context.Context,
-	domainID, userID int64,
-	profile *model.EmailProfile,
-	password []byte,
-) (*model.EmailProfile, error) {
+func (s *emailProfileStore) Create(ctx context.Context, domainID, userID int64, profile *model.EmailProfile, password, oauthClientSecret []byte) (*model.EmailProfile, error) {
 	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
 
 	const query = `
@@ -224,11 +219,12 @@ INSERT INTO email.profile (
     auth_type,
     oauth_provider,
     oauth_client_id,
+    oauth_client_secret,
     created_by,
     updated_by
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
 )
 RETURNING *`
 
@@ -257,6 +253,7 @@ RETURNING *`
 		authType,
 		nullIfEmpty(string(profile.OAuthProvider)),
 		nullIfEmpty(profile.OAuthClientID),
+		oauthClientSecret,
 		nullIfZero(userID),
 		nullIfZero(userID),
 	)
@@ -266,7 +263,7 @@ func (s *emailProfileStore) Update(
 	ctx context.Context,
 	domainID, userID, id int64,
 	profile *model.EmailProfile,
-	password []byte,
+	password, oauthClientSecret []byte,
 ) (*model.EmailProfile, error) {
 	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
 
@@ -286,16 +283,30 @@ UPDATE email.profile SET
     smtp_port = $12,
     smtp_security = $13,
     username = $14,
-    password = COALESCE($15, password),
+    password = CASE WHEN $19 = 'basic' THEN COALESCE($15, password) ELSE NULL END,
     mailbox = $16,
     fetch_interval_seconds = $17,
     flow_id = $18,
     auth_type = $19,
     oauth_provider = $20,
     oauth_client_id = $21,
+    oauth_client_secret = CASE
+        WHEN $19 <> 'oauth2' THEN NULL
+        WHEN oauth_provider IS NOT DISTINCT FROM $20
+            AND oauth_client_id IS NOT DISTINCT FROM $21
+            THEN COALESCE($22, oauth_client_secret)
+        ELSE $22
+    END,
+    oauth_refresh_token = CASE
+        WHEN $19 = 'oauth2'
+            AND oauth_provider IS NOT DISTINCT FROM $20
+            AND oauth_client_id IS NOT DISTINCT FROM $21
+            THEN oauth_refresh_token
+        ELSE NULL
+    END,
     updated_at = now(),
-    updated_by = $22
-WHERE domain_id = $23 AND id = $24
+    updated_by = $23
+WHERE domain_id = $24 AND id = $25
 RETURNING *`
 
 	return s.writeReturning(
@@ -322,6 +333,7 @@ RETURNING *`
 		authType,
 		nullIfEmpty(string(profile.OAuthProvider)),
 		nullIfEmpty(profile.OAuthClientID),
+		oauthClientSecret,
 		nullIfZero(userID),
 		domainID,
 		id,
@@ -347,13 +359,86 @@ func (s *emailProfileStore) GetPassword(ctx context.Context, domainID, id int64)
 	return password, nil
 }
 
-func (s *emailProfileStore) SetConnectionResult(
+func (s *emailProfileStore) GetOAuthCredentials(ctx context.Context, domainID, id int64) (*store.EmailProfileOAuthCredentials, error) {
+	const query = `
+SELECT oauth_client_secret, oauth_refresh_token
+FROM email.profile
+WHERE domain_id = $1 AND id = $2`
+
+	credentials := new(store.EmailProfileOAuthCredentials)
+	if err := s.db.QueryRowContext(ctx, query, domainID, id).Scan(
+		&credentials.ClientSecret,
+		&credentials.RefreshToken,
+	); err != nil {
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return nil, kiterrors.NotFound(
+				"email profile does not exist or access is denied",
+				kiterrors.WithID("store.email_profile.not_found"),
+				kiterrors.WithCause(err),
+			)
+		}
+
+		return nil, err
+	}
+
+	return credentials, nil
+}
+
+func (s *emailProfileStore) SetOAuthRefreshToken(
 	ctx context.Context,
 	domainID, id int64,
-	state model.EmailConnectionState,
-	connectionError string,
-	successful bool,
+	refreshToken []byte,
 ) error {
+	const query = `
+UPDATE email.profile
+SET oauth_refresh_token = $1
+WHERE domain_id = $2 AND id = $3
+RETURNING id`
+
+	var updatedID int64
+	if err := s.db.QueryRowContext(ctx, query, refreshToken, domainID, id).Scan(&updatedID); err != nil {
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return kiterrors.NotFound(
+				"email profile does not exist or access is denied",
+				kiterrors.WithID("store.email_profile.not_found"),
+				kiterrors.WithCause(err),
+			)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (s *emailProfileStore) SetOAuthRefreshTokenAndState(ctx context.Context, domainID, id int64, refreshToken []byte, state model.EmailConnectionState) error {
+	const query = `
+UPDATE email.profile SET
+    oauth_refresh_token = $1,
+    connection_state = $2,
+    connection_error = NULL
+WHERE domain_id = $3 AND id = $4
+RETURNING id`
+
+	var updatedID int64
+	if err := s.db.QueryRowContext(
+		ctx, query, refreshToken, state, domainID, id,
+	).Scan(&updatedID); err != nil {
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return kiterrors.NotFound(
+				"email profile does not exist or access is denied",
+				kiterrors.WithID("store.email_profile.not_found"),
+				kiterrors.WithCause(err),
+			)
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (s *emailProfileStore) SetConnectionResult(ctx context.Context, domainID, id int64, state model.EmailConnectionState, connectionError string, successful bool) error {
 	const query = `
 UPDATE email.profile SET
     connection_state = $1,

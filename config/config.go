@@ -13,10 +13,16 @@ import (
 // Config contains all settings used by the service and migration commands.
 type Config struct {
 	Service  ServiceConfig      `mapstructure:"service"`
+	OAuth    OAuthConfig        `mapstructure:"oauth"`
 	Log      appconfig.Log      `mapstructure:"log"`
 	Postgres appconfig.Postgres `mapstructure:"postgres"`
 	Consul   appconfig.Consul   `mapstructure:"consul"`
 	Pubsub   appconfig.Pubsub   `mapstructure:"pubsub"`
+}
+
+// OAuthConfig contains deployment-specific OAuth settings shared by providers.
+type OAuthConfig struct {
+	RedirectURL string `mapstructure:"redirect_url"`
 }
 
 // ServiceConfig contains the gRPC listen address and TLS connection settings.
@@ -90,6 +96,7 @@ func LoadMigrateConfig(args []string) (*Config, error) {
 func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.String("service.addr", "localhost:8080", "gRPC listen and advertised address")
 	appconfig.RegisterGRPCConnFlags(flags, "service.conn", true)
+	flags.String("oauth.redirect_url", "", "public OAuth callback URL exposed through API Gateway")
 }
 
 func (c *Config) validate() error {
@@ -97,6 +104,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: service.addr is required")
 	}
 	if err := appconfig.ValidateGRPCConn("service.conn", c.Service.Connection); err != nil {
+		return err
+	}
+	if err := validateOAuthRedirectURL(c.OAuth.RedirectURL); err != nil {
 		return err
 	}
 
@@ -111,6 +121,25 @@ func (c *Config) validate() error {
 	}
 	if err := validateAMQPURL(c.Pubsub.URL); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func validateOAuthRedirectURL(rawURL string) error {
+	if rawURL == "" {
+		return nil
+	}
+
+	u, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return fmt.Errorf("config: parse oauth.redirect_url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("config: oauth.redirect_url must use http or https scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("config: oauth.redirect_url must include a host")
 	}
 
 	return nil

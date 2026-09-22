@@ -6,6 +6,10 @@ service:
     # Certificate verification is enabled by default. Disable it only for local development.
     verify_certs: false
 
+oauth:
+  # Public callback registered in the Google or Microsoft OAuth application.
+  redirect_url: "https://example.webitel.com/oauth/email/callback"
+
 log:
   level: "info"
   json: false

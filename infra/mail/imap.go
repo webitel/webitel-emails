@@ -21,13 +21,24 @@ const defaultIMAPTimeout = 20 * time.Second
 // STARTTLS when the profile requires it.
 var ErrStartTLSNotSupported = errors.New("imap: STARTTLS is not supported")
 
-// IMAPConnection contains the settings required to validate Basic Auth.
+// ErrXOAUTH2NotSupported reports an IMAP server that does not advertise the
+// XOAUTH2 authentication mechanism when the profile requires it.
+var ErrXOAUTH2NotSupported = errors.New("imap: XOAUTH2 is not supported")
+
+// IMAPConnection contains the settings required to validate a connection,
+// either with Basic Auth or, for an OAuth2 profile, XOAUTH2.
 type IMAPConnection struct {
 	Host     string
 	Port     int32
 	Security model.EmailConnectionSecurity
 	Username string
 	Password string
+	// AuthType selects Basic (default, including an empty value, matching
+	// model.EmailProfile) or OAuth2 (XOAUTH2) authentication.
+	AuthType model.EmailAuthType
+	// AccessToken is the OAuth2 bearer token used for XOAUTH2 when AuthType
+	// is EmailAuthTypeOAuth2. It is ignored otherwise.
+	AccessToken string
 }
 
 // IMAPClient validates an IMAP connection without reading mailbox data.
@@ -93,11 +104,36 @@ func (c *imapClient) Test(ctx context.Context, connection IMAPConnection) error 
 		}
 	}
 
-	if err := imap.Login(connection.Username, connection.Password); err != nil {
-		return fmt.Errorf("imap: authenticate: %w", err)
+	if err := imapAuthenticate(imap, connection); err != nil {
+		return err
 	}
 	if err := imap.Logout(); err != nil {
 		return fmt.Errorf("imap: logout: %w", err)
+	}
+
+	return nil
+}
+
+// imapAuthenticate logs in with Basic Auth, or, for an OAuth2 profile,
+// authenticates over XOAUTH2 using the caller-supplied access token.
+func imapAuthenticate(imapClient *client.Client, connection IMAPConnection) error {
+	if connection.AuthType != model.EmailAuthTypeOAuth2 {
+		if err := imapClient.Login(connection.Username, connection.Password); err != nil {
+			return fmt.Errorf("imap: authenticate: %w", err)
+		}
+
+		return nil
+	}
+
+	supported, err := imapClient.SupportAuth(xoauth2Mechanism)
+	if err != nil {
+		return fmt.Errorf("imap: check XOAUTH2 support: %w", err)
+	}
+	if !supported {
+		return ErrXOAUTH2NotSupported
+	}
+	if err := imapClient.Authenticate(newXOAUTH2IMAPClient(connection.Username, connection.AccessToken)); err != nil {
+		return fmt.Errorf("imap: authenticate: %w", err)
 	}
 
 	return nil
