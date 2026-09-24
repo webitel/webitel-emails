@@ -389,9 +389,11 @@ func (s *emailProfileStore) SetOAuthRefreshToken(
 	domainID, id int64,
 	refreshToken []byte,
 ) error {
+	// updated_at also invalidates any IMAP session cached against the old token version.
 	const query = `
 UPDATE email.profile
-SET oauth_refresh_token = $1
+SET oauth_refresh_token = $1,
+    updated_at = now()
 WHERE domain_id = $2 AND id = $3
 RETURNING id`
 
@@ -412,11 +414,14 @@ RETURNING id`
 }
 
 func (s *emailProfileStore) SetOAuthRefreshTokenAndState(ctx context.Context, domainID, id int64, refreshToken []byte, state model.EmailConnectionState) error {
+	// updated_at also invalidates any IMAP session cached against the old token version,
+	// so a revoked (Disconnect) or replaced authorization stops an already-open session.
 	const query = `
 UPDATE email.profile SET
     oauth_refresh_token = $1,
     connection_state = $2,
-    connection_error = NULL
+    connection_error = NULL,
+    updated_at = now()
 WHERE domain_id = $3 AND id = $4
 RETURNING id`
 

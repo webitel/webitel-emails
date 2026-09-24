@@ -2,7 +2,7 @@ package mail
 
 import "go.uber.org/fx"
 
-// Module provides clients used to validate mailbox connections.
+// Module provides IMAP and SMTP clients.
 var Module = fx.Module(
 	"mail",
 	fx.Provide(

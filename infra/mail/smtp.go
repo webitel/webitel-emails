@@ -24,9 +24,8 @@ var (
 	// ErrSMTPAuthNotSupported reports an SMTP server without a supported Basic
 	// authentication mechanism.
 	ErrSMTPAuthNotSupported = errors.New("smtp: Basic authentication is not supported")
-	// ErrSMTPXOAUTH2NotSupported reports an SMTP server that does not
-	// advertise the XOAUTH2 authentication mechanism when the profile
-	// requires it.
+	// ErrSMTPXOAUTH2NotSupported reports an SMTP server that does not advertise
+	// the XOAUTH2 authentication mechanism when the profile requires it.
 	ErrSMTPXOAUTH2NotSupported = errors.New("smtp: XOAUTH2 is not supported")
 )
 

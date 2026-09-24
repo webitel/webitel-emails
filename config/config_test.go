@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/webitel/webitel-go-kit/appconfig"
 )
@@ -159,6 +160,22 @@ func TestConfigValidate(t *testing.T) {
 		Postgres: appconfig.Postgres{DSN: "postgres://localhost/webitel"},
 		Consul:   appconfig.Consul{Addr: "localhost:8500"},
 		Pubsub:   appconfig.Pubsub{URL: "amqp://localhost/", Driver: "rabbitmq"},
+		LeaderElection: LeaderElectionConfig{
+			SessionTTL:      15 * time.Second,
+			LockDelay:       time.Second,
+			RetryInterval:   10 * time.Second,
+			ErrorCooldown:   5 * time.Second,
+			MonitorInterval: 5 * time.Second,
+		},
+		ProfileDistribution: ProfileDistributionConfig{ReconcileInterval: 10 * time.Second},
+		IMAPPolling: IMAPPollingConfig{
+			TickInterval:       time.Second,
+			MaxConcurrency:     50,
+			ShutdownTimeout:    10 * time.Second,
+			FetchBatchSize:     50,
+			MaxMessagesPerPoll: 500,
+			MaxOpenConnections: 500,
+		},
 	}
 
 	tests := []struct {
@@ -223,6 +240,18 @@ func clearConfigEnvironment(t *testing.T) {
 		"CONSUL_ADDR",
 		"PUBSUB_URL",
 		"PUBSUB_DRIVER",
+		"LEADER_ELECTION_SESSION_TTL",
+		"LEADER_ELECTION_LOCK_DELAY",
+		"LEADER_ELECTION_RETRY_INTERVAL",
+		"LEADER_ELECTION_ERROR_COOLDOWN",
+		"LEADER_ELECTION_MONITOR_INTERVAL",
+		"PROFILE_DISTRIBUTION_RECONCILE_INTERVAL",
+		"IMAP_POLLING_TICK_INTERVAL",
+		"IMAP_POLLING_MAX_CONCURRENCY",
+		"IMAP_POLLING_SHUTDOWN_TIMEOUT",
+		"IMAP_POLLING_FETCH_BATCH_SIZE",
+		"IMAP_POLLING_MAX_MESSAGES_PER_POLL",
+		"IMAP_POLLING_MAX_OPEN_CONNECTIONS",
 	} {
 		t.Setenv(name, "")
 	}

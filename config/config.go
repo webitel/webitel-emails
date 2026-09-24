@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/webitel/webitel-go-kit/appconfig"
@@ -18,6 +19,37 @@ type Config struct {
 	Postgres appconfig.Postgres `mapstructure:"postgres"`
 	Consul   appconfig.Consul   `mapstructure:"consul"`
 	Pubsub   appconfig.Pubsub   `mapstructure:"pubsub"`
+
+	LeaderElection      LeaderElectionConfig      `mapstructure:"leader_election"`
+	ProfileDistribution ProfileDistributionConfig `mapstructure:"profile_distribution"`
+	IMAPPolling         IMAPPollingConfig         `mapstructure:"imap_polling"`
+}
+
+// IMAPPollingConfig tunes how an instance polls the mailboxes assigned to it.
+type IMAPPollingConfig struct {
+	TickInterval    time.Duration `mapstructure:"tick_interval"`
+	MaxConcurrency  int           `mapstructure:"max_concurrency"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	FetchBatchSize  int           `mapstructure:"fetch_batch_size"`
+	// Remaining messages are fetched by an immediate next poll.
+	MaxMessagesPerPoll int `mapstructure:"max_messages_per_poll"`
+	// Caps IMAP connections kept open (including idle, reused ones), separately from
+	// MaxConcurrency, which only bounds polls running at the same time.
+	MaxOpenConnections int `mapstructure:"max_open_connections"`
+}
+
+// LeaderElectionConfig tunes the Consul session used to elect the service leader.
+type LeaderElectionConfig struct {
+	SessionTTL      time.Duration `mapstructure:"session_ttl"`
+	LockDelay       time.Duration `mapstructure:"lock_delay"`
+	RetryInterval   time.Duration `mapstructure:"retry_interval"`
+	ErrorCooldown   time.Duration `mapstructure:"error_cooldown"`
+	MonitorInterval time.Duration `mapstructure:"monitor_interval"`
+}
+
+// ProfileDistributionConfig tunes how the leader assigns Email Profiles to instances.
+type ProfileDistributionConfig struct {
+	ReconcileInterval time.Duration `mapstructure:"reconcile_interval"`
 }
 
 // OAuthConfig contains deployment-specific OAuth settings shared by providers.
@@ -31,9 +63,8 @@ type ServiceConfig struct {
 	Connection appconfig.GRPCConn `mapstructure:"conn"`
 }
 
-// LoadServerConfig loads configuration for the long-running service process.
-// Values are resolved in this order: CLI flags, environment, config file,
-// then defaults.
+// LoadServerConfig loads configuration for the long-running service process,
+// resolving values from CLI flags, then environment, config file and defaults.
 func LoadServerConfig(args []string) (*Config, error) {
 	loader := appconfig.NewLoader(appconfig.Sections{
 		Log:      true,
@@ -97,6 +128,20 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.String("service.addr", "localhost:8080", "gRPC listen and advertised address")
 	appconfig.RegisterGRPCConnFlags(flags, "service.conn", true)
 	flags.String("oauth.redirect_url", "", "public OAuth callback URL exposed through API Gateway")
+
+	flags.Duration("leader_election.session_ttl", 15*time.Second, "Consul leader session TTL (10s..24h)")
+	flags.Duration("leader_election.lock_delay", time.Second, "delay before the leader key can be taken after a session dies")
+	flags.Duration("leader_election.retry_interval", 10*time.Second, "how often a standby instance tries to become leader")
+	flags.Duration("leader_election.error_cooldown", 5*time.Second, "pause after a failed Consul call or leader term")
+	flags.Duration("leader_election.monitor_interval", 5*time.Second, "how often the leader checks that it still holds the key")
+	flags.Duration("profile_distribution.reconcile_interval", 10*time.Second, "how often the leader rebalances Email Profiles")
+
+	flags.Duration("imap_polling.tick_interval", time.Second, "how often an instance looks for mailboxes due for a check")
+	flags.Int("imap_polling.max_concurrency", 50, "maximum mailboxes polled at the same time by one instance")
+	flags.Duration("imap_polling.shutdown_timeout", 10*time.Second, "how long shutdown waits for running polls")
+	flags.Int("imap_polling.fetch_batch_size", 50, "messages fetched by one IMAP FETCH command")
+	flags.Int("imap_polling.max_messages_per_poll", 500, "messages handled by one poll of a mailbox")
+	flags.Int("imap_polling.max_open_connections", 500, "maximum IMAP connections kept open at the same time by one instance")
 }
 
 func (c *Config) validate() error {
@@ -107,6 +152,15 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := validateOAuthRedirectURL(c.OAuth.RedirectURL); err != nil {
+		return err
+	}
+	if err := c.LeaderElection.validate(); err != nil {
+		return err
+	}
+	if c.ProfileDistribution.ReconcileInterval <= 0 {
+		return fmt.Errorf("config: profile_distribution.reconcile_interval must be positive")
+	}
+	if err := c.IMAPPolling.validate(); err != nil {
 		return err
 	}
 
@@ -121,6 +175,43 @@ func (c *Config) validate() error {
 	}
 	if err := validateAMQPURL(c.Pubsub.URL); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (c LeaderElectionConfig) validate() error {
+	// Consul accepts session TTLs only within this range.
+	if c.SessionTTL < 10*time.Second || c.SessionTTL > 24*time.Hour {
+		return fmt.Errorf("config: leader_election.session_ttl must be within 10s..24h")
+	}
+	// Zero would silently fall back to the Consul default of 15s.
+	if c.LockDelay <= 0 {
+		return fmt.Errorf("config: leader_election.lock_delay must be positive")
+	}
+	if c.RetryInterval <= 0 || c.ErrorCooldown <= 0 || c.MonitorInterval <= 0 {
+		return fmt.Errorf("config: leader_election intervals must be positive")
+	}
+
+	return nil
+}
+
+func (c IMAPPollingConfig) validate() error {
+	if c.TickInterval <= 0 {
+		return fmt.Errorf("config: imap_polling.tick_interval must be positive")
+	}
+	if c.MaxConcurrency < 1 {
+		return fmt.Errorf("config: imap_polling.max_concurrency must be at least 1")
+	}
+	// Must leave room for other stop hooks within the default fx stop timeout of 15s.
+	if c.ShutdownTimeout <= 0 || c.ShutdownTimeout >= 15*time.Second {
+		return fmt.Errorf("config: imap_polling.shutdown_timeout must be within (0, 15s)")
+	}
+	if c.FetchBatchSize < 1 || c.MaxMessagesPerPoll < c.FetchBatchSize {
+		return fmt.Errorf("config: imap_polling.fetch_batch_size must be at least 1 and not above max_messages_per_poll")
+	}
+	if c.MaxOpenConnections < c.MaxConcurrency {
+		return fmt.Errorf("config: imap_polling.max_open_connections must be at least max_concurrency")
 	}
 
 	return nil

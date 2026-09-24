@@ -7,6 +7,7 @@ import (
 	authinfra "github.com/webitel/webitel-emails/infra/auth"
 	"github.com/webitel/webitel-emails/infra/crypto"
 	servicediscovery "github.com/webitel/webitel-emails/infra/discovery"
+	"github.com/webitel/webitel-emails/infra/leader"
 	"github.com/webitel/webitel-emails/infra/logging"
 	"github.com/webitel/webitel-emails/infra/mail"
 	"github.com/webitel/webitel-emails/infra/oauth"
@@ -28,4 +29,5 @@ var Module = fx.Module(
 	tls.Module,
 	grpcserver.Module,
 	servicediscovery.Module,
+	leader.Module,
 )

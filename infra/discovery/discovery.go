@@ -17,9 +17,15 @@ import (
 	_ "github.com/webitel/webitel-go-kit/infra/discovery/consul"
 )
 
+// NewInstanceID returns the ID shared by Consul registration, leader election and profile ownership.
+func NewInstanceID() model.InstanceID {
+	return model.InstanceID(kitdiscovery.GenerateInstanceID(model.ServiceName))
+}
+
 func New(
 	cfg *config.Config,
 	log *slog.Logger,
+	instanceID model.InstanceID,
 	_ *grpcserver.Server,
 	lifecycle fx.Lifecycle,
 ) (kitdiscovery.DiscoveryProvider, error) {
@@ -35,7 +41,7 @@ func New(
 	}
 
 	instance := &kitdiscovery.ServiceInstance{
-		Id:      kitdiscovery.GenerateInstanceID(model.ServiceName),
+		Id:      string(instanceID),
 		Name:    model.ServiceName,
 		Version: model.Version,
 		Metadata: map[string]string{

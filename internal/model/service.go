@@ -9,6 +9,9 @@ const (
 	ServiceNamespace = "webitel"
 )
 
+// InstanceID identifies this process in Consul and as an Email Profile owner.
+type InstanceID string
+
 // Build metadata is overridden through linker flags for release binaries.
 var (
 	Version        = "0.0.0"

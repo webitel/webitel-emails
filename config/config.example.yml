@@ -26,3 +26,21 @@ consul:
 pubsub:
   url: "amqp://webitel:webitel@127.0.0.1:5672/"
   driver: "rabbitmq"
+
+leader_election:
+  session_ttl: "15s"
+  lock_delay: "1s"
+  retry_interval: "10s"
+  error_cooldown: "5s"
+  monitor_interval: "5s"
+
+profile_distribution:
+  reconcile_interval: "10s"
+
+imap_polling:
+  tick_interval: "1s"
+  max_concurrency: 50
+  shutdown_timeout: "10s"
+  fetch_batch_size: 50
+  max_messages_per_poll: 500
+  max_open_connections: 500

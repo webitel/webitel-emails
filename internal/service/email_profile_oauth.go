@@ -52,10 +52,8 @@ func (s *EmailProfileService) BeginOAuth(ctx context.Context, domainID, userID, 
 	}
 
 	return &model.EmailProfileOAuthStart{
-		// prompt=consent forces the provider's consent screen even when the
-		// user already authorized this profile before, which is required to
-		// reliably get a refresh_token back from Google on a repeat
-		// authorization (e.g. after Disconnect or reauthorization_required).
+		// prompt=consent re-shows the consent screen on a repeat authorization,
+		// which is what makes Google reliably return a refresh_token again.
 		AuthURL: config.AuthCodeURL(
 			state,
 			oauth2.AccessTypeOffline,
@@ -159,9 +157,8 @@ func (s *EmailProfileService) accessToken(ctx context.Context, domainID, id int6
 		return "", oauthRefreshError(err)
 	}
 
-	// The oauth2 package backfills Token.RefreshToken with the original
-	// value when the provider does not rotate it, so this only persists a
-	// write when the provider actually issued a new refresh token.
+	// oauth2 backfills Token.RefreshToken with the original when the provider does
+	// not rotate it, so this writes only when a genuinely new token was issued.
 	if token.RefreshToken != refreshToken {
 		sealedRefreshToken, err := s.encryptor.Encrypt(ctx, []byte(token.RefreshToken))
 		if err != nil {
@@ -176,10 +173,8 @@ func (s *EmailProfileService) accessToken(ctx context.Context, domainID, id int6
 	return token.AccessToken, nil
 }
 
-// DisconnectOAuth clears a profile's stored OAuth refresh token, letting the
-// user run BeginOAuth again. Mirrors engine's LogoutEmailProfile (which just
-// clears the stored token, with no provider-side revocation call); this also
-// resets connection_state, a concept LogoutEmailProfile predates.
+// DisconnectOAuth clears a profile's stored refresh token so BeginOAuth can run again,
+// like engine's LogoutEmailProfile, and also resets connection_state, which that predates.
 func (s *EmailProfileService) DisconnectOAuth(ctx context.Context, domainID, id int64) (*model.EmailProfile, error) {
 	entry := s.oauthTokenEntry(domainID, id)
 	entry.mu.Lock()
@@ -206,28 +201,24 @@ func (s *EmailProfileService) DisconnectOAuth(ctx context.Context, domainID, id 
 	return s.store.Locate(ctx, domainID, id)
 }
 
-// isOAuthReauthorizationRequired reports whether err indicates that the
-// OAuth provider rejected the stored refresh token (invalid_grant), meaning
-// the profile needs the user to authorize it again.
+// isOAuthReauthorizationRequired reports whether the provider rejected the stored
+// refresh token (invalid_grant), meaning the user must authorize the profile again.
 func isOAuthReauthorizationRequired(err error) bool {
 	return errors.Is(err, errOAuthReauthorizationRequired)
 }
 
 var errOAuthReauthorizationRequired = errors.New("oauth: refresh token rejected by provider")
 
-// oauthRefreshError distinguishes a rejected refresh token (the provider
-// revoked or expired the authorization) from a transport or provider-side
-// failure, so a caller can react to a revoked authorization without
-// inspecting the provider-specific error shape itself.
+// oauthRefreshError distinguishes a revoked or expired authorization from a transport
+// or provider-side failure, so callers need not inspect the provider's own error shape.
 func oauthRefreshError(cause error) error {
 	var retrieveErr *oauth2.RetrieveError
 	if errors.As(cause, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
 		return kiterrors.Unauthenticated(
 			"OAuth refresh token was rejected by the provider",
 			kiterrors.WithID("email.profile.oauth.invalid_grant"),
-			// WithCause carries the sentinel so callers can detect this case
-			// with isOAuthReauthorizationRequired; AppendMessagef keeps the
-			// provider's own error text for logs and diagnostics.
+			// WithCause carries the sentinel for isOAuthReauthorizationRequired;
+			// AppendMessagef keeps the provider's own text for logs.
 			kiterrors.WithCause(errOAuthReauthorizationRequired),
 			kiterrors.AppendMessagef("%v", cause),
 		)

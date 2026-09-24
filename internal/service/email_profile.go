@@ -144,9 +144,8 @@ func (s *EmailProfileService) Delete(ctx context.Context, domainID, id int64) (*
 	return profile, nil
 }
 
-// Test validates the saved connection settings against IMAP and SMTP, using
-// Basic Auth or OAuth2 depending on the profile. A protocol failure is
-// returned in its own result and does not skip the other protocol check.
+// Test validates the saved settings against IMAP and SMTP using Basic Auth or OAuth2;
+// each protocol's failure is reported in its own result and does not skip the other.
 func (s *EmailProfileService) Test(ctx context.Context, domainID, id int64) (*model.EmailProfileTestResult, error) {
 	profile, err := s.store.Locate(ctx, domainID, id)
 	if err != nil {

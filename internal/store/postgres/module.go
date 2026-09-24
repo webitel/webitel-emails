@@ -14,5 +14,9 @@ var Module = fx.Module(
 			NewEmailProfileStore,
 			fx.As(new(store.EmailProfileStore)),
 		),
+		fx.Annotate(
+			NewEmailProfileRuntimeStore,
+			fx.As(new(store.EmailProfileRuntimeStore)),
+		),
 	),
 )
