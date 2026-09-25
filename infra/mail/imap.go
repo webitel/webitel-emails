@@ -2,7 +2,6 @@
 package mail
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 
+	"github.com/webitel/webitel-emails/config"
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
@@ -28,6 +28,9 @@ var ErrStartTLSNotSupported = errors.New("imap: STARTTLS is not supported")
 // ErrXOAUTH2NotSupported reports an IMAP server that does not advertise the
 // XOAUTH2 authentication mechanism when the profile requires it.
 var ErrXOAUTH2NotSupported = errors.New("imap: XOAUTH2 is not supported")
+
+// ErrMessageTooLarge reports a raw message larger than the configured MIME limit.
+var ErrMessageTooLarge = errors.New("imap: message exceeds maximum size")
 
 // IMAPConnection contains the settings required to validate a connection,
 // either with Basic Auth or, for an OAuth2 profile, XOAUTH2.
@@ -66,8 +69,8 @@ type IMAPSession interface {
 	// SearchUIDsRange returns UIDs in [from, to] in ascending order; to == 0 means unbounded
 	// (matching the IMAP '*' wildcard), for servers that do not report UIDNEXT.
 	SearchUIDsRange(from, to uint32) ([]uint32, error)
-	// FetchRaw fetches raw RFC822 messages with BODY.PEEK[], so \Seen is not set.
-	FetchRaw(uids []uint32) ([]*IMAPMessage, error)
+	// FetchRaw streams raw RFC822 messages with BODY.PEEK[], so \Seen is not set.
+	FetchRaw(uids []uint32, handle func(*IMAPMessage)) error
 }
 
 // IMAPMailbox is the state of a mailbox opened read-only.
@@ -80,17 +83,22 @@ type IMAPMailbox struct {
 
 // IMAPMessage is one raw RFC822 message.
 type IMAPMessage struct {
-	UID uint32
-	Raw []byte
+	UID          uint32
+	InternalDate time.Time
+	Raw          []byte
 }
 
 type imapClient struct {
-	timeout time.Duration
+	timeout        time.Duration
+	maxMessageSize int
 }
 
 // NewIMAPClient creates an IMAP client.
-func NewIMAPClient() IMAPClient {
-	return &imapClient{timeout: defaultIMAPTimeout}
+func NewIMAPClient(cfg *config.Config) IMAPClient {
+	return &imapClient{
+		timeout:        defaultIMAPTimeout,
+		maxMessageSize: int(cfg.IMAPPolling.MaxMessageSize),
+	}
 }
 
 func (c *imapClient) Test(ctx context.Context, connection IMAPConnection) error {
@@ -144,7 +152,7 @@ func (c *imapClient) Connect(ctx context.Context, connection IMAPConnection) (IM
 		return nil, err
 	}
 
-	return &imapSession{client: imap}, nil
+	return &imapSession{client: imap, maxMessageSize: c.maxMessageSize}, nil
 }
 
 func startIMAPSession(imap *client.Client, connection IMAPConnection, tlsConfig *tls.Config) error {
@@ -165,7 +173,10 @@ func startIMAPSession(imap *client.Client, connection IMAPConnection, tlsConfig 
 }
 
 type imapSession struct {
-	client *client.Client
+	client         *client.Client
+	maxMessageSize int
+	// Once a batch is proven unordered, this connection keeps fetching one UID at a time.
+	sequentialFetch bool
 }
 
 func (s *imapSession) Noop() error {
@@ -226,61 +237,179 @@ func (s *imapSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
 	return slices.Compact(uids), nil
 }
 
-func (s *imapSession) FetchRaw(uids []uint32) ([]*IMAPMessage, error) {
+func (s *imapSession) FetchRaw(uids []uint32, handle func(*IMAPMessage)) error {
 	if len(uids) == 0 {
-		return nil, nil
+		return nil
 	}
 
+	ordered := slices.Clone(uids)
+	slices.Sort(ordered)
+	ordered = slices.Compact(ordered)
+
+	if s.sequentialFetch {
+		return s.fetchRawSequential(ordered, handle)
+	}
+
+	next, unordered, err := s.fetchRawBatch(ordered, handle)
+	if unordered {
+		s.sequentialFetch = true
+	}
+	if err != nil {
+		return err
+	}
+	if next < len(ordered) {
+		return s.fetchRawSequential(ordered[next:], handle)
+	}
+
+	return nil
+}
+
+func (s *imapSession) fetchRawSequential(uids []uint32, handle func(*IMAPMessage)) error {
+	for _, uid := range uids {
+		message, err := s.fetchRaw(uid)
+		if err != nil {
+			return err
+		}
+		if message != nil {
+			handle(message)
+		}
+	}
+
+	return nil
+}
+
+func (s *imapSession) fetchRawBatch(uids []uint32, handle func(*IMAPMessage)) (int, bool, error) {
 	set := new(imap.SeqSet)
 	set.AddNum(uids...)
 
-	section := &imap.BodySectionName{Peek: true}
-	items := []imap.FetchItem{imap.FetchUid, section.FetchItem()}
+	section := &imap.BodySectionName{Peek: true, Partial: []int{0, s.maxMessageSize + 1}}
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, section.FetchItem()}
 
-	fetched := make(chan *imap.Message, len(uids))
+	fetched := make(chan *imap.Message)
 	done := make(chan error, 1)
 	go func() {
 		done <- s.client.UidFetch(set, items, fetched)
 	}()
 
-	messages := make([]*IMAPMessage, 0, len(uids))
+	requested := make(map[uint32]struct{}, len(uids))
+	for _, uid := range uids {
+		requested[uid] = struct{}{}
+	}
+
+	seen := make(map[uint32]struct{}, len(uids))
+	next := 0
+	fallbackAt := -1
+	var lastUID uint32
+	var unordered bool
 	var readErr error
+
 	for message := range fetched {
-		if message.Uid == 0 {
-			// Not attributable to any message; expunged messages are simply missing below.
+		uid := message.Uid
+		if _, ok := requested[uid]; !ok {
+			continue
+		}
+		if _, ok := seen[uid]; ok {
+			continue
+		}
+		seen[uid] = struct{}{}
+
+		if lastUID != 0 && uid < lastUID {
+			unordered = true
+		}
+		lastUID = uid
+
+		if fallbackAt >= 0 || readErr != nil {
+			continue
+		}
+		if next >= len(uids) || uid != uids[next] {
+			// A gap can be either an expunge or an early response for a later UID.
+			fallbackAt = next
 			continue
 		}
 
-		body := message.GetBody(section)
-		if body == nil {
-			// The UID exists but the section is missing: a server error, not an expunge, so it
-			// fails the batch instead of letting the cursor silently skip the message.
-			if readErr == nil {
-				readErr = fmt.Errorf("imap: message %d has no body in the FETCH response", message.Uid)
-			}
-
+		result, err := s.readFetchedMessage(message, section, uid)
+		if err != nil {
+			readErr = err
 			continue
 		}
 
-		raw, err := io.ReadAll(body)
-		if err != nil && readErr == nil {
-			readErr = fmt.Errorf("imap: read message %d: %w", message.Uid, err)
-		}
-
-		messages = append(messages, &IMAPMessage{UID: message.Uid, Raw: raw})
+		handle(result)
+		next++
 	}
 
 	if err := <-done; err != nil {
-		return nil, fmt.Errorf("imap: fetch messages: %w", err)
+		return next, unordered, fmt.Errorf("imap: fetch messages: %w", err)
+	}
+	if readErr != nil {
+		return next, unordered, readErr
+	}
+	if fallbackAt >= 0 {
+		return fallbackAt, unordered, nil
+	}
+
+	// UIDs missing only at the end were expunged after UID SEARCH.
+	return len(uids), unordered, nil
+}
+
+func (s *imapSession) fetchRaw(uid uint32) (*IMAPMessage, error) {
+	set := new(imap.SeqSet)
+	set.AddNum(uid)
+
+	section := &imap.BodySectionName{Peek: true, Partial: []int{0, s.maxMessageSize + 1}}
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, section.FetchItem()}
+
+	fetched := make(chan *imap.Message)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.client.UidFetch(set, items, fetched)
+	}()
+
+	var result *IMAPMessage
+	var readErr error
+	for message := range fetched {
+		if message.Uid != uid || result != nil || readErr != nil {
+			continue
+		}
+
+		result, readErr = s.readFetchedMessage(message, section, uid)
+	}
+
+	if err := <-done; err != nil {
+		return nil, fmt.Errorf("imap: fetch message %d: %w", uid, err)
 	}
 	if readErr != nil {
 		return nil, readErr
 	}
 
-	// Messages expunged after the search are simply missing from the result.
-	slices.SortFunc(messages, func(a, b *IMAPMessage) int { return cmp.Compare(a.UID, b.UID) })
+	// A message expunged after UID SEARCH is absent from the FETCH response.
+	return result, nil
+}
 
-	return messages, nil
+func (s *imapSession) readFetchedMessage(message *imap.Message, section *imap.BodySectionName, uid uint32) (*IMAPMessage, error) {
+	body := message.GetBody(section)
+	if body == nil {
+		return nil, fmt.Errorf("imap: message %d has no body in the FETCH response", uid)
+	}
+	if body.Len() > s.maxMessageSize {
+		return nil, fmt.Errorf("%w: message %d is larger than %d bytes", ErrMessageTooLarge, uid, s.maxMessageSize)
+	}
+
+	var raw []byte
+	var err error
+	if buffer, ok := body.(interface{ Bytes() []byte }); ok {
+		raw = buffer.Bytes()
+	} else {
+		raw, err = io.ReadAll(body)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("imap: read message %d: %w", uid, err)
+	}
+
+	return &IMAPMessage{
+		UID:          uid,
+		InternalDate: message.InternalDate,
+		Raw:          raw,
+	}, nil
 }
 
 // imapAuthenticate logs in with Basic Auth, or, for an OAuth2 profile,

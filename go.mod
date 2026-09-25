@@ -8,8 +8,10 @@ require (
 	buf.build/gen/go/webitel/webitel-go/grpc/go v1.6.2-20260528093848-00aedb783a79.1
 	buf.build/gen/go/webitel/webitel-go/protocolbuffers/go v1.36.12-20260528093848-00aedb783a79.1
 	github.com/emersion/go-imap v1.2.1
+	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/k3a/html2text v1.2.1
 	github.com/mbobakov/grpc-consul-resolver v1.5.3
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/pflag v1.0.10

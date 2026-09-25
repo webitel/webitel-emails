@@ -173,8 +173,15 @@ func TestConfigValidate(t *testing.T) {
 			MaxConcurrency:     50,
 			ShutdownTimeout:    10 * time.Second,
 			FetchBatchSize:     50,
+			MaxMessageSize:     40 << 20,
 			MaxMessagesPerPoll: 500,
 			MaxOpenConnections: 500,
+		},
+		MIME: MIMEConfig{
+			MaxBodySize:             1 << 20,
+			MaxAttachmentSize:       10 << 20,
+			MaxAttachmentsTotalSize: 20 << 20,
+			MaxAttachments:          15,
 		},
 	}
 
@@ -192,6 +199,9 @@ func TestConfigValidate(t *testing.T) {
 		{name: "unsupported pubsub driver", mutate: func(c *Config) { c.Pubsub.Driver = "kafka" }, wantErr: "pubsub.driver"},
 		{name: "invalid pubsub scheme", mutate: func(c *Config) { c.Pubsub.URL = "https://localhost" }, wantErr: "amqp or amqps"},
 		{name: "missing pubsub host", mutate: func(c *Config) { c.Pubsub.URL = "amqp:///" }, wantErr: "include a host"},
+		{name: "invalid attachment size", mutate: func(c *Config) { c.MIME.MaxAttachmentSize = 0 }, wantErr: "mime.max_attachment_size"},
+		{name: "invalid total attachment size", mutate: func(c *Config) { c.MIME.MaxAttachmentsTotalSize = 1 }, wantErr: "mime.max_attachments_total_size"},
+		{name: "invalid attachment count", mutate: func(c *Config) { c.MIME.MaxAttachments = 0 }, wantErr: "mime.max_attachments"},
 	}
 
 	for _, tt := range tests {
@@ -250,8 +260,13 @@ func clearConfigEnvironment(t *testing.T) {
 		"IMAP_POLLING_MAX_CONCURRENCY",
 		"IMAP_POLLING_SHUTDOWN_TIMEOUT",
 		"IMAP_POLLING_FETCH_BATCH_SIZE",
+		"IMAP_POLLING_MAX_MESSAGE_SIZE",
 		"IMAP_POLLING_MAX_MESSAGES_PER_POLL",
 		"IMAP_POLLING_MAX_OPEN_CONNECTIONS",
+		"MIME_MAX_BODY_SIZE",
+		"MIME_MAX_ATTACHMENT_SIZE",
+		"MIME_MAX_ATTACHMENTS_TOTAL_SIZE",
+		"MIME_MAX_ATTACHMENTS",
 	} {
 		t.Setenv(name, "")
 	}

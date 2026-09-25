@@ -2,6 +2,7 @@ package polling
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 
@@ -72,34 +73,64 @@ func (s *Scheduler) sync(
 		batch := uids[:min(s.cfg.FetchBatchSize, len(uids))]
 		uids = uids[len(batch):]
 
-		messages, err := conn.FetchRaw(batch)
-		if err != nil {
-			return syncResult{cursor: imapCursor(cursor), imapErr: err}
-		}
+		handled := make(map[uint32]struct{}, len(batch))
+		var (
+			handlerErr error
+			maxHandled uint32
+		)
+		err := conn.FetchRaw(batch, func(message *mailinfra.IMAPMessage) {
+			if handlerErr != nil {
+				return
+			}
+			if err := ctx.Err(); err != nil {
+				handlerErr = err
 
-		for _, message := range messages {
-			if ctx.Err() != nil {
-				return syncResult{cursor: imapCursor(cursor), handlerErr: ctx.Err()}
+				return
 			}
 
-			err := s.handler.Handle(ctx, &inbound.Message{
-				DomainID:    profile.DomainID,
-				ProfileID:   profile.ID,
-				Mailbox:     mailbox.Name,
-				UIDValidity: mailbox.UIDValidity,
-				UID:         message.UID,
-				Raw:         message.Raw,
+			handlerErr = s.handler.Handle(ctx, &inbound.Message{
+				DomainID:     profile.DomainID,
+				ProfileID:    profile.ID,
+				Mailbox:      mailbox.Name,
+				UIDValidity:  mailbox.UIDValidity,
+				UID:          message.UID,
+				InternalDate: message.InternalDate,
+				Raw:          message.Raw,
 			})
-			if err != nil {
-				// The cursor stays before this message, so the next poll retries it.
+			if handlerErr == nil {
+				handled[message.UID] = struct{}{}
+				maxHandled = max(maxHandled, message.UID)
+			}
+		})
+		if err != nil {
+			advanceConfirmed(&cursor, batch, handled)
+			if errors.Is(err, mailinfra.ErrMessageTooLarge) {
 				return syncResult{cursor: imapCursor(cursor), handlerErr: err}
 			}
 
-			cursor.LastUID = message.UID
+			return syncResult{cursor: imapCursor(cursor), imapErr: err}
+		}
+		if handlerErr != nil {
+			advanceConfirmed(&cursor, batch, handled)
+
+			return syncResult{cursor: imapCursor(cursor), handlerErr: handlerErr}
+		}
+		if maxHandled > cursor.LastUID {
+			cursor.LastUID = maxHandled
 		}
 	}
 
 	return syncResult{cursor: imapCursor(cursor), more: more}
+}
+
+func advanceConfirmed(cursor *model.IMAPCursor, requested []uint32, handled map[uint32]struct{}) {
+	for _, uid := range requested {
+		if _, ok := handled[uid]; !ok {
+			return
+		}
+
+		cursor.LastUID = uid
+	}
 }
 
 // searchNewUIDs collects UIDs after "after" in bounded windows, so a large backlog never lands

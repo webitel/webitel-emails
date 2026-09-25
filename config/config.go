@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -23,6 +24,15 @@ type Config struct {
 	LeaderElection      LeaderElectionConfig      `mapstructure:"leader_election"`
 	ProfileDistribution ProfileDistributionConfig `mapstructure:"profile_distribution"`
 	IMAPPolling         IMAPPollingConfig         `mapstructure:"imap_polling"`
+	MIME                MIMEConfig                `mapstructure:"mime"`
+}
+
+// MIMEConfig limits the decoded email content kept by the MIME parser.
+type MIMEConfig struct {
+	MaxBodySize             int64 `mapstructure:"max_body_size"`
+	MaxAttachmentSize       int64 `mapstructure:"max_attachment_size"`
+	MaxAttachmentsTotalSize int64 `mapstructure:"max_attachments_total_size"`
+	MaxAttachments          int   `mapstructure:"max_attachments"`
 }
 
 // IMAPPollingConfig tunes how an instance polls the mailboxes assigned to it.
@@ -31,6 +41,7 @@ type IMAPPollingConfig struct {
 	MaxConcurrency  int           `mapstructure:"max_concurrency"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	FetchBatchSize  int           `mapstructure:"fetch_batch_size"`
+	MaxMessageSize  int64         `mapstructure:"max_message_size"`
 	// Remaining messages are fetched by an immediate next poll.
 	MaxMessagesPerPoll int `mapstructure:"max_messages_per_poll"`
 	// Caps IMAP connections kept open (including idle, reused ones), separately from
@@ -139,9 +150,14 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("imap_polling.tick_interval", time.Second, "how often an instance looks for mailboxes due for a check")
 	flags.Int("imap_polling.max_concurrency", 50, "maximum mailboxes polled at the same time by one instance")
 	flags.Duration("imap_polling.shutdown_timeout", 10*time.Second, "how long shutdown waits for running polls")
-	flags.Int("imap_polling.fetch_batch_size", 50, "messages fetched by one IMAP FETCH command")
+	flags.Int("imap_polling.fetch_batch_size", 50, "messages processed in one polling batch")
+	flags.Int64("imap_polling.max_message_size", 40<<20, "maximum raw MIME message size in bytes")
 	flags.Int("imap_polling.max_messages_per_poll", 500, "messages handled by one poll of a mailbox")
 	flags.Int("imap_polling.max_open_connections", 500, "maximum IMAP connections kept open at the same time by one instance")
+	flags.Int64("mime.max_body_size", 1<<20, "maximum decoded size of each plain-text or HTML body in bytes")
+	flags.Int64("mime.max_attachment_size", 10<<20, "maximum decoded size of one accepted attachment in bytes")
+	flags.Int64("mime.max_attachments_total_size", 20<<20, "maximum total decoded size of accepted attachments in one email")
+	flags.Int("mime.max_attachments", 15, "maximum accepted attachments in one email")
 }
 
 func (c *Config) validate() error {
@@ -161,6 +177,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: profile_distribution.reconcile_interval must be positive")
 	}
 	if err := c.IMAPPolling.validate(); err != nil {
+		return err
+	}
+	if err := c.MIME.validate(c.IMAPPolling.MaxMessageSize); err != nil {
 		return err
 	}
 
@@ -210,8 +229,28 @@ func (c IMAPPollingConfig) validate() error {
 	if c.FetchBatchSize < 1 || c.MaxMessagesPerPoll < c.FetchBatchSize {
 		return fmt.Errorf("config: imap_polling.fetch_batch_size must be at least 1 and not above max_messages_per_poll")
 	}
+	if c.MaxMessageSize < 1 || c.MaxMessageSize >= math.MaxInt32 {
+		return fmt.Errorf("config: imap_polling.max_message_size must be within 1..%d bytes", math.MaxInt32-1)
+	}
 	if c.MaxOpenConnections < c.MaxConcurrency {
 		return fmt.Errorf("config: imap_polling.max_open_connections must be at least max_concurrency")
+	}
+
+	return nil
+}
+
+func (c MIMEConfig) validate(maxMessageSize int64) error {
+	if c.MaxBodySize < 1 || c.MaxBodySize > maxMessageSize {
+		return fmt.Errorf("config: mime.max_body_size must be within 1..imap_polling.max_message_size bytes")
+	}
+	if c.MaxAttachmentSize < 1 || c.MaxAttachmentSize > maxMessageSize {
+		return fmt.Errorf("config: mime.max_attachment_size must be within 1..imap_polling.max_message_size bytes")
+	}
+	if c.MaxAttachmentsTotalSize < c.MaxAttachmentSize || c.MaxAttachmentsTotalSize > maxMessageSize {
+		return fmt.Errorf("config: mime.max_attachments_total_size must be at least max_attachment_size and not above imap_polling.max_message_size")
+	}
+	if c.MaxAttachments < 1 {
+		return fmt.Errorf("config: mime.max_attachments must be at least 1")
 	}
 
 	return nil
