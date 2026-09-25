@@ -1,0 +1,9 @@
+From: sender@example.org
+To: receiver@example.org
+Subject: Windows-1251 body
+Message-ID: <windows-1251@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=windows-1251
+Content-Transfer-Encoding: base64
+
+z/Do4rPyLCDx4rPy5SE=
