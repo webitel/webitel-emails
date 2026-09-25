@@ -1,0 +1,53 @@
+# webitel-emails local configuration example.
+
+service:
+  addr: "127.0.0.1:8080"
+  conn:
+    # Certificate verification is enabled by default. Disable it only for local development.
+    verify_certs: false
+
+oauth:
+  # Public callback registered in the Google or Microsoft OAuth application.
+  redirect_url: "https://example.webitel.com/oauth/email/callback"
+
+log:
+  level: "info"
+  json: false
+  otel: false
+  file: ""
+  console: true
+
+postgres:
+  dsn: "postgres://postgres:postgres@127.0.0.1:5432/webitel?application_name=email-service&sslmode=disable&connect_timeout=10"
+
+consul:
+  addr: "127.0.0.1:8500"
+
+pubsub:
+  url: "amqp://webitel:webitel@127.0.0.1:5672/"
+  driver: "rabbitmq"
+
+leader_election:
+  session_ttl: "15s"
+  lock_delay: "1s"
+  retry_interval: "10s"
+  error_cooldown: "5s"
+  monitor_interval: "5s"
+
+profile_distribution:
+  reconcile_interval: "10s"
+
+imap_polling:
+  tick_interval: "1s"
+  max_concurrency: 50
+  shutdown_timeout: "10s"
+  fetch_batch_size: 50
+  max_message_size: 41943040
+  max_messages_per_poll: 500
+  max_open_connections: 500
+
+mime:
+  max_body_size: 1048576
+  max_attachment_size: 10485760
+  max_attachments_total_size: 20971520
+  max_attachments: 15
