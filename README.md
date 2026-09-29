@@ -32,6 +32,31 @@ health status through the standard gRPC health service, and registers itself in
 Consul. Database migrations are never applied automatically when the server
 starts.
 
+## Tests
+
+Unit tests need nothing but Go. Integration tests are excluded from this run:
+
+```shell
+go test ./...
+```
+
+The integration tests under `test/integration` need PostgreSQL. They start one
+shared instance through Docker, or use an existing database when
+`EMAILS_TEST_POSTGRES_DSN` is set:
+
+```shell
+go test -tags=integration ./test/integration/...
+
+# Or use an existing disposable database instead of Docker:
+EMAILS_TEST_POSTGRES_DSN='postgres://webitel:webitel@127.0.0.1:5432/webitel_test?sslmode=disable' \
+    go test -tags=integration ./test/integration/...
+```
+
+They apply the embedded migrations themselves and empty the email tables between
+tests, so point them at a throwaway database. An explicitly requested integration
+run fails when neither Docker nor the configured database is available; it never
+passes by silently skipping PostgreSQL checks.
+
 ## Inbound email
 
 The service reads mailboxes over IMAP, parses each message and stores it as a
