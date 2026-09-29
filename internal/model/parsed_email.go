@@ -54,11 +54,19 @@ type ParsedEmail struct {
 	UIDValidity uint32
 	UID         uint32
 
-	MessageID  string
+	MessageID string
+	// True when the parser had to generate the identifier itself.
+	MessageIDGenerated bool
+	// SHA-256 of the raw RFC822 source; deduplicates an email without a Message-ID.
+	RawSHA256 []byte
+
 	InReplyTo  string
 	References []string
 	Subject    string
-	Date       time.Time
+	// SentAt comes from the Date header and may be absent; ReceivedAt comes from
+	// IMAP INTERNALDATE and always holds a value.
+	SentAt     *time.Time
+	ReceivedAt time.Time
 
 	From    []EmailAddress
 	Sender  *EmailAddress

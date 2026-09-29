@@ -72,12 +72,22 @@ func (s *Scheduler) poll(ctx context.Context, runtime *model.EmailProfileRuntime
 		log.Error("handle inbound email", "err", synced.handlerErr)
 		result.Error = "handler: " + synced.handlerErr.Error()
 	}
-	if synced.more {
-		now := time.Now()
-		result.NextCheckAt = &now
-	}
+	result.NextCheckAt = nextCheckAt(synced)
 
 	s.complete(ctx, assignment, result, log)
+}
+
+// nextCheckAt asks for an immediate next poll only when a clean backlog remains.
+// After a handler error the same email would be retried on every tick with no
+// delay at all, so the profile falls back to its configured interval.
+func nextCheckAt(synced syncResult) *time.Time {
+	if !synced.more || synced.handlerErr != nil {
+		return nil
+	}
+
+	now := time.Now()
+
+	return &now
 }
 
 // session reuses a healthy connection opened with the current settings or opens a new one.

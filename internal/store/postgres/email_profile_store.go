@@ -485,7 +485,18 @@ DELETE FROM email.profile
 WHERE domain_id = $1 AND id = $2
 RETURNING *`
 
-	return s.writeReturning(ctx, query, domainID, id)
+	profile, err := s.writeReturning(ctx, query, domainID, id)
+	if err != nil {
+		// Threads and Messages reference the profile with ON DELETE RESTRICT so
+		// that removing a mailbox never erases its conversation history.
+		if isConstraintViolation(err, foreignKeyViolation, "thread_profile_fk", "message_profile_fk") {
+			return nil, store.ErrEmailProfileHasHistory
+		}
+
+		return nil, err
+	}
+
+	return profile, nil
 }
 
 // writeReturning wraps a write in a CTE and reads the changed row through the

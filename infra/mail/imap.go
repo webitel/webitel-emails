@@ -29,9 +29,6 @@ var ErrStartTLSNotSupported = errors.New("imap: STARTTLS is not supported")
 // XOAUTH2 authentication mechanism when the profile requires it.
 var ErrXOAUTH2NotSupported = errors.New("imap: XOAUTH2 is not supported")
 
-// ErrMessageTooLarge reports a raw message larger than the configured MIME limit.
-var ErrMessageTooLarge = errors.New("imap: message exceeds maximum size")
-
 // IMAPConnection contains the settings required to validate a connection,
 // either with Basic Auth or, for an OAuth2 profile, XOAUTH2.
 type IMAPConnection struct {
@@ -68,7 +65,11 @@ type IMAPSession interface {
 	Examine(mailbox string) (*IMAPMailbox, error)
 	// SearchUIDsRange returns UIDs in [from, to] in ascending order; to == 0 means unbounded
 	// (matching the IMAP '*' wildcard), for servers that do not report UIDNEXT.
-	SearchUIDsRange(from, to uint32) ([]uint32, error)
+	// A non-zero since also limits the search by INTERNALDATE, to whole days.
+	SearchUIDsRange(from, to uint32, since time.Time) ([]uint32, error)
+	// FetchInternalDates returns the INTERNALDATE of each UID without its body,
+	// so a scan can decide what to download.
+	FetchInternalDates(uids []uint32) (map[uint32]time.Time, error)
 	// FetchRaw streams raw RFC822 messages with BODY.PEEK[], so \Seen is not set.
 	FetchRaw(uids []uint32, handle func(*IMAPMessage)) error
 }
@@ -85,7 +86,12 @@ type IMAPMailbox struct {
 type IMAPMessage struct {
 	UID          uint32
 	InternalDate time.Time
-	Raw          []byte
+	// Size is the server-reported RFC822.SIZE, zero when it was not reported.
+	Size uint32
+	Raw  []byte
+	// TooLarge means Raw holds only the fetched prefix of a message above the
+	// configured limit. Such a message is reported, not retried.
+	TooLarge bool
 }
 
 type imapClient struct {
@@ -210,7 +216,7 @@ func (s *imapSession) Examine(mailbox string) (*IMAPMailbox, error) {
 	return &IMAPMailbox{Name: mailbox, UIDValidity: status.UidValidity, UIDNext: status.UidNext}, nil
 }
 
-func (s *imapSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
+func (s *imapSession) SearchUIDsRange(from, to uint32, since time.Time) ([]uint32, error) {
 	// A range ending with * always includes the last message, so out-of-range UIDs are
 	// filtered out below regardless of which bound (or both) the caller gave.
 	set := new(imap.SeqSet)
@@ -218,6 +224,9 @@ func (s *imapSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
 
 	criteria := imap.NewSearchCriteria()
 	criteria.Uid = set
+	if !since.IsZero() {
+		criteria.Since = since
+	}
 
 	found, err := s.client.UidSearch(criteria)
 	if err != nil {
@@ -235,6 +244,31 @@ func (s *imapSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
 	slices.Sort(uids)
 
 	return slices.Compact(uids), nil
+}
+
+func (s *imapSession) FetchInternalDates(uids []uint32) (map[uint32]time.Time, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+
+	set := new(imap.SeqSet)
+	set.AddNum(uids...)
+
+	fetched := make(chan *imap.Message)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.client.UidFetch(set, []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate}, fetched)
+	}()
+
+	dates := make(map[uint32]time.Time, len(uids))
+	for message := range fetched {
+		dates[message.Uid] = message.InternalDate
+	}
+	if err := <-done; err != nil {
+		return nil, fmt.Errorf("imap: fetch internal dates: %w", err)
+	}
+
+	return dates, nil
 }
 
 func (s *imapSession) FetchRaw(uids []uint32, handle func(*IMAPMessage)) error {
@@ -283,7 +317,7 @@ func (s *imapSession) fetchRawBatch(uids []uint32, handle func(*IMAPMessage)) (i
 	set.AddNum(uids...)
 
 	section := &imap.BodySectionName{Peek: true, Partial: []int{0, s.maxMessageSize + 1}}
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, section.FetchItem()}
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, section.FetchItem()}
 
 	fetched := make(chan *imap.Message)
 	done := make(chan error, 1)
@@ -356,7 +390,7 @@ func (s *imapSession) fetchRaw(uid uint32) (*IMAPMessage, error) {
 	set.AddNum(uid)
 
 	section := &imap.BodySectionName{Peek: true, Partial: []int{0, s.maxMessageSize + 1}}
-	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, section.FetchItem()}
+	items := []imap.FetchItem{imap.FetchUid, imap.FetchInternalDate, imap.FetchRFC822Size, section.FetchItem()}
 
 	fetched := make(chan *imap.Message)
 	done := make(chan error, 1)
@@ -390,9 +424,6 @@ func (s *imapSession) readFetchedMessage(message *imap.Message, section *imap.Bo
 	if body == nil {
 		return nil, fmt.Errorf("imap: message %d has no body in the FETCH response", uid)
 	}
-	if body.Len() > s.maxMessageSize {
-		return nil, fmt.Errorf("%w: message %d is larger than %d bytes", ErrMessageTooLarge, uid, s.maxMessageSize)
-	}
 
 	var raw []byte
 	var err error
@@ -405,10 +436,15 @@ func (s *imapSession) readFetchedMessage(message *imap.Message, section *imap.Bo
 		return nil, fmt.Errorf("imap: read message %d: %w", uid, err)
 	}
 
+	// The body was fetched with a partial range one byte beyond the limit, so a
+	// longer prefix proves the message itself is larger. Its headers usually fit
+	// in what was read, which is what makes the quarantine record useful.
 	return &IMAPMessage{
 		UID:          uid,
 		InternalDate: message.InternalDate,
+		Size:         message.Size,
 		Raw:          raw,
+		TooLarge:     len(raw) > s.maxMessageSize,
 	}, nil
 }
 

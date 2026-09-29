@@ -13,6 +13,7 @@ import (
 	mailinfra "github.com/webitel/webitel-emails/infra/mail"
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/model"
+	"github.com/webitel/webitel-emails/internal/store"
 )
 
 func TestSyncAdvancesCursorAfterMIMEHandling(t *testing.T) {
@@ -73,29 +74,77 @@ func TestSyncRetriesAfterMIMEHandlerError(t *testing.T) {
 	}
 }
 
+func TestSyncAdvancesPastDurablyQuarantinedEmail(t *testing.T) {
+	malformed, err := os.ReadFile("../inbound/testdata/malformed.eml")
+	if err != nil {
+		t.Fatalf("read malformed fixture: %v", err)
+	}
+
+	failures := new(pollingFailureStore)
+	next := new(recordingParsedMessageHandler)
+	mime := inbound.NewMIMEHandler(newTestMIMEParser(), next)
+	handler := inbound.NewQuarantineHandler(mime, failures, testLogger())
+	scheduler := newTestScheduler(handler)
+	valid := []byte("Message-ID: <valid@x>\r\nFrom: sender@example.org\r\nTo: receiver@example.org\r\n\r\nValid")
+	session := &testIMAPSession{
+		availableUIDs: []uint32{2, 3},
+		rawByUID: map[uint32][]byte{
+			2: malformed,
+			3: valid,
+		},
+	}
+
+	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
+	if result.imapErr != nil || result.handlerErr != nil {
+		t.Fatalf("sync errors: imap=%v handler=%v", result.imapErr, result.handlerErr)
+	}
+	if result.cursor.IMAP.LastUID != 3 {
+		t.Fatalf("cursor = %+v, want LastUID 3", result.cursor.IMAP)
+	}
+	if len(failures.records) != 1 || failures.records[0].UID != 2 ||
+		failures.records[0].Category != model.InboundFailureMIMEParse {
+		t.Fatalf("quarantine records = %+v", failures.records)
+	}
+	if next.calls != 1 || next.message == nil || next.message.UID != 3 {
+		t.Fatalf("next calls = %d, message = %+v", next.calls, next.message)
+	}
+}
+
+func TestSyncDoesNotAdvanceWhenQuarantineWriteFails(t *testing.T) {
+	malformed, err := os.ReadFile("../inbound/testdata/malformed.eml")
+	if err != nil {
+		t.Fatalf("read malformed fixture: %v", err)
+	}
+
+	writeErr := errors.New("quarantine database unavailable")
+	failures := &pollingFailureStore{err: writeErr}
+	mime := inbound.NewMIMEHandler(newTestMIMEParser(), new(recordingParsedMessageHandler))
+	scheduler := newTestScheduler(inbound.NewQuarantineHandler(mime, failures, testLogger()))
+	session := &testIMAPSession{availableUIDs: []uint32{2}, rawByUID: map[uint32][]byte{2: malformed}}
+
+	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
+	if !errors.Is(result.handlerErr, writeErr) {
+		t.Fatalf("handler error = %v, want quarantine write error", result.handlerErr)
+	}
+	if result.cursor.IMAP.LastUID != 1 {
+		t.Fatalf("cursor advanced to %d after failed quarantine write", result.cursor.IMAP.LastUID)
+	}
+}
+
 func TestAdvanceConfirmedStopsAtFirstGap(t *testing.T) {
+	confirmed := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	cursor := model.IMAPCursor{LastUID: 1}
-	advanceConfirmed(&cursor, []uint32{2, 3, 4}, map[uint32]struct{}{2: {}, 4: {}})
+	advanceConfirmed(&cursor, []uint32{2, 3, 4}, map[uint32]time.Time{
+		2: confirmed,
+		4: confirmed.Add(time.Hour),
+	})
 
 	if cursor.LastUID != 2 {
 		t.Fatalf("LastUID = %d, want 2", cursor.LastUID)
 	}
-}
-
-func TestSyncClassifiesMessageTooLargeAsHandlerError(t *testing.T) {
-	scheduler := newTestScheduler(inbound.NewMIMEHandler(newTestMIMEParser(), new(recordingParsedMessageHandler)))
-	session := &testIMAPSession{fetchErr: mailinfra.ErrMessageTooLarge}
-
-	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
-
-	if result.imapErr != nil {
-		t.Fatalf("imap error = %v", result.imapErr)
-	}
-	if !errors.Is(result.handlerErr, mailinfra.ErrMessageTooLarge) {
-		t.Fatalf("handler error = %v, want ErrMessageTooLarge", result.handlerErr)
-	}
-	if result.cursor == nil || result.cursor.IMAP == nil || result.cursor.IMAP.LastUID != 1 {
-		t.Fatalf("cursor = %+v, want LastUID 1", result.cursor)
+	// The checkpoint follows the same prefix, not the highest confirmed date.
+	if !cursor.LastInternalDate.Equal(confirmed) {
+		t.Fatalf("checkpoint = %v, want %v", cursor.LastInternalDate, confirmed)
 	}
 }
 
@@ -103,8 +152,13 @@ type testIMAPSession struct {
 	raw           []byte
 	availableUIDs []uint32
 	rawByUID      map[uint32][]byte
+	datesByUID    map[uint32]time.Time
+	uidValidity   uint32
 	fetchErr      error
 	fetchCalls    int
+	searchedSince time.Time
+	fetchedUIDs   []uint32
+	events        []string
 }
 
 func (s *testIMAPSession) Noop() error  { return nil }
@@ -119,10 +173,17 @@ func (s *testIMAPSession) Examine(mailbox string) (*mailinfra.IMAPMailbox, error
 		}
 	}
 
-	return &mailinfra.IMAPMailbox{Name: mailbox, UIDValidity: 10, UIDNext: uidNext}, nil
+	uidValidity := s.uidValidity
+	if uidValidity == 0 {
+		uidValidity = 10
+	}
+
+	return &mailinfra.IMAPMailbox{Name: mailbox, UIDValidity: uidValidity, UIDNext: uidNext}, nil
 }
 
-func (s *testIMAPSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
+func (s *testIMAPSession) SearchUIDsRange(from, to uint32, since time.Time) ([]uint32, error) {
+	s.searchedSince = since
+
 	uids := s.availableUIDs
 	if len(uids) == 0 {
 		uids = []uint32{2}
@@ -138,8 +199,22 @@ func (s *testIMAPSession) SearchUIDsRange(from, to uint32) ([]uint32, error) {
 	return result, nil
 }
 
+func (s *testIMAPSession) FetchInternalDates(uids []uint32) (map[uint32]time.Time, error) {
+	s.events = append(s.events, "metadata")
+	dates := make(map[uint32]time.Time, len(uids))
+	for _, uid := range uids {
+		if date, ok := s.datesByUID[uid]; ok {
+			dates[uid] = date
+		}
+	}
+
+	return dates, nil
+}
+
 func (s *testIMAPSession) FetchRaw(uids []uint32, handle func(*mailinfra.IMAPMessage)) error {
+	s.events = append(s.events, "raw")
 	s.fetchCalls++
+	s.fetchedUIDs = append(s.fetchedUIDs, uids...)
 	if s.fetchErr != nil {
 		return s.fetchErr
 	}
@@ -148,7 +223,11 @@ func (s *testIMAPSession) FetchRaw(uids []uint32, handle func(*mailinfra.IMAPMes
 		if value, ok := s.rawByUID[uid]; ok {
 			raw = value
 		}
-		handle(&mailinfra.IMAPMessage{UID: uid, InternalDate: time.Now(), Raw: raw})
+		date, ok := s.datesByUID[uid]
+		if !ok {
+			date = time.Now()
+		}
+		handle(&mailinfra.IMAPMessage{UID: uid, InternalDate: date, Raw: raw})
 	}
 
 	return nil
@@ -157,6 +236,17 @@ func (s *testIMAPSession) FetchRaw(uids []uint32, handle func(*mailinfra.IMAPMes
 type recordingParsedMessageHandler struct {
 	calls   int
 	message *model.ParsedEmail
+}
+
+type pollingFailureStore struct {
+	records []*model.InboundFailure
+	err     error
+}
+
+func (s *pollingFailureStore) Record(_ context.Context, failure *model.InboundFailure) error {
+	s.records = append(s.records, failure)
+
+	return s.err
 }
 
 func (h *recordingParsedMessageHandler) Handle(_ context.Context, message *model.ParsedEmail) error {
@@ -172,8 +262,40 @@ func newTestScheduler(handler inbound.Handler) *Scheduler {
 			FetchBatchSize:     10,
 			MaxMessagesPerPoll: 10,
 		},
-		handler: handler,
+		handler:  handler,
+		messages: new(testMessageStore),
 	}
+}
+
+// testMessageStore answers the fallback checkpoint lookup only.
+type testMessageStore struct {
+	lastReceivedAt time.Time
+}
+
+func (s *testMessageStore) LastReceivedAt(context.Context, int64, int64) (time.Time, error) {
+	return s.lastReceivedAt, nil
+}
+
+func (s *testMessageStore) LocateByMessageID(
+	context.Context, int64, int64, string,
+) (*store.EmailMessageIdentity, error) {
+	return nil, nil
+}
+
+func (s *testMessageStore) LocateByIMAPIdentity(
+	context.Context, int64, int64, model.EmailIMAPIdentity,
+) (*store.EmailMessageIdentity, error) {
+	return nil, nil
+}
+
+func (s *testMessageStore) LocateByRawChecksum(
+	context.Context, int64, int64, []byte,
+) (*store.EmailMessageIdentity, error) {
+	return nil, nil
+}
+
+func (s *testMessageStore) Create(context.Context, *model.EmailMessage) (*model.EmailMessage, error) {
+	return nil, nil
 }
 
 func newTestMIMEParser() *inbound.MIMEParser {

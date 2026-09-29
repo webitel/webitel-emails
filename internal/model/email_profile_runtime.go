@@ -67,6 +67,22 @@ type IMAPCursor struct {
 	UIDValidity uint32 `json:"uid_validity"`
 	// Highest UID confirmed by the handler.
 	LastUID uint32 `json:"last_uid"`
+	// LastInternalDate is the server-side time of the newest confirmed email. It
+	// is the only checkpoint that survives a UIDVALIDITY change.
+	LastInternalDate time.Time `json:"last_internal_date,omitempty"`
+	// Recovery is set while the mailbox is re-read after its UIDs were reassigned.
+	Recovery *IMAPRecovery `json:"recovery,omitempty"`
+}
+
+// IMAPRecovery bounds the re-read of a mailbox whose UIDs were reassigned, so
+// the scan neither restarts the whole history nor follows newly arriving mail.
+type IMAPRecovery struct {
+	// Since is the date handed to IMAP SEARCH, which compares whole days only.
+	Since time.Time `json:"since"`
+	// Checkpoint is the exact time the scan resumes from.
+	Checkpoint time.Time `json:"checkpoint"`
+	// ToUID is the end of the mailbox when recovery started.
+	ToUID uint32 `json:"to_uid"`
 }
 
 // IsValidFor reports whether the cursor can be continued.

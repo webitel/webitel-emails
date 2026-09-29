@@ -16,7 +16,11 @@ type Message struct {
 	UIDValidity  uint32
 	UID          uint32
 	InternalDate time.Time
-	Raw          []byte
+	// Size is the server-reported RFC822.SIZE, zero when it was not reported.
+	Size int64
+	Raw  []byte
+	// TooLarge means Raw holds only a prefix of an email above the size limit.
+	TooLarge bool
 }
 
 // Handler accepts a raw email; nil means it is safely processed and the cursor may move past it.

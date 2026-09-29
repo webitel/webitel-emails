@@ -52,7 +52,18 @@ func NewMIMEParser(cfg *config.Config) *MIMEParser {
 	}
 }
 
+// Parse reads one raw email. Every failure except cancellation is a property of
+// the bytes themselves, so retrying cannot fix it and the email is permanent.
 func (p *MIMEParser) Parse(ctx context.Context, message *Message) (*model.ParsedEmail, error) {
+	parsed, err := p.parse(ctx, message)
+	if err != nil && ctx.Err() == nil {
+		return nil, Permanent(model.InboundFailureMIMEParse, err)
+	}
+
+	return parsed, err
+}
+
+func (p *MIMEParser) parse(ctx context.Context, message *Message) (*model.ParsedEmail, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -73,7 +84,8 @@ func (p *MIMEParser) Parse(ctx context.Context, message *Message) (*model.Parsed
 
 	messageID, err := header.MessageID()
 	messageID = cleanMessageID(messageID)
-	if err != nil || messageID == "" {
+	messageIDGenerated := err != nil || messageID == ""
+	if messageIDGenerated {
 		messageID = fallbackMessageID(message)
 	}
 
@@ -85,12 +97,15 @@ func (p *MIMEParser) Parse(ctx context.Context, message *Message) (*model.Parsed
 	subject, _ := header.Subject()
 	subject = truncateRunes(cleanHeaderText(subject), maxHeaderTextRunes)
 
-	date, err := header.Date()
-	if err != nil || date.IsZero() {
-		date = message.InternalDate
+	// The sender controls Date, so it is kept apart from the receive time.
+	var sentAt *time.Time
+	if date, err := header.Date(); err == nil && !date.IsZero() {
+		sentAt = &date
 	}
-	if date.IsZero() {
-		date = time.Now().UTC()
+
+	receivedAt := message.InternalDate
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
 	}
 
 	from := parseAddressList(&header, "From")
@@ -101,21 +116,24 @@ func (p *MIMEParser) Parse(ctx context.Context, message *Message) (*model.Parsed
 	bcc := parseAddressList(&header, "Bcc")
 
 	parsed := &model.ParsedEmail{
-		DomainID:    message.DomainID,
-		ProfileID:   message.ProfileID,
-		Mailbox:     message.Mailbox,
-		UIDValidity: message.UIDValidity,
-		UID:         message.UID,
-		MessageID:   messageID,
-		References:  references,
-		Subject:     subject,
-		Date:        date,
-		From:        from,
-		ReplyTo:     replyTo,
-		To:          to,
-		Cc:          cc,
-		Bcc:         bcc,
-		Kind:        model.EmailKindRegular,
+		DomainID:           message.DomainID,
+		ProfileID:          message.ProfileID,
+		Mailbox:            message.Mailbox,
+		UIDValidity:        message.UIDValidity,
+		UID:                message.UID,
+		MessageID:          messageID,
+		MessageIDGenerated: messageIDGenerated,
+		RawSHA256:          rawChecksum(message.Raw),
+		References:         references,
+		Subject:            subject,
+		SentAt:             sentAt,
+		ReceivedAt:         receivedAt,
+		From:               from,
+		ReplyTo:            replyTo,
+		To:                 to,
+		Cc:                 cc,
+		Bcc:                bcc,
+		Kind:               model.EmailKindRegular,
 	}
 	switch {
 	case isBounce(entity.Header, from, sender):
@@ -589,6 +607,14 @@ func limitReferences(values []string) []string {
 	}
 
 	return values[start:]
+}
+
+// rawChecksum identifies the exact bytes of an email, so a redelivery is
+// recognized even after its mailbox coordinates changed.
+func rawChecksum(raw []byte) []byte {
+	sum := sha256.Sum256(raw)
+
+	return sum[:]
 }
 
 func fallbackMessageID(message *Message) string {

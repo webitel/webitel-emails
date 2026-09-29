@@ -2,9 +2,9 @@ package polling
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"math"
+	"time"
 
 	mailinfra "github.com/webitel/webitel-emails/infra/mail"
 	"github.com/webitel/webitel-emails/internal/inbound"
@@ -45,23 +45,40 @@ func (s *Scheduler) sync(
 
 		return syncResult{cursor: imapCursor(model.IMAPCursor{Mailbox: mailbox.Name, UIDValidity: mailbox.UIDValidity, LastUID: last})}
 	case stored.IMAP.UIDValidity != mailbox.UIDValidity:
-		log.Warn("imap uidvalidity changed, resyncing mailbox", "mailbox", mailbox.Name, "old", stored.IMAP.UIDValidity, "new", mailbox.UIDValidity)
-		cursor = model.IMAPCursor{Mailbox: mailbox.Name, UIDValidity: mailbox.UIDValidity}
+		last, err := lastUID(conn, mailbox)
+		if err != nil {
+			return syncResult{imapErr: err}
+		}
+
+		checkpoint := recoveryCheckpoint(*stored.IMAP)
+		if checkpoint.IsZero() {
+			// A cursor written before recovery existed carries no checkpoint, so
+			// the newest stored email is the next best place to resume from.
+			checkpoint, err = s.messages.LastReceivedAt(ctx, profile.DomainID, profile.ID)
+			if err != nil {
+				return syncResult{handlerErr: err}
+			}
+		}
+
+		cursor = startRecovery(*stored.IMAP, mailbox, last, checkpoint, log)
+		if cursor.Recovery == nil {
+			return syncResult{cursor: imapCursor(cursor)}
+		}
+
+		return s.recover(ctx, conn, profile, cursor, log)
+	case stored.IMAP.Recovery != nil:
+		return s.recover(ctx, conn, profile, *stored.IMAP, log)
 	default:
 		cursor = *stored.IMAP
 	}
 
-	uids, err := searchNewUIDs(ctx, conn, cursor.LastUID, mailbox.UIDNext, s.cfg.MaxMessagesPerPoll)
+	uids, err := searchUIDs(ctx, conn, searchRange{
+		after: cursor.LastUID,
+		to:    lastSearchableUID(mailbox),
+		limit: s.cfg.MaxMessagesPerPoll,
+	})
 	if err != nil {
 		return syncResult{cursor: imapCursor(cursor), imapErr: err}
-	}
-
-	if s.handler == nil {
-		if len(uids) > 0 {
-			log.Info("new emails are waiting for a handler", "mailbox", mailbox.Name, "count", len(uids))
-		}
-
-		return syncResult{cursor: imapCursor(cursor)}
 	}
 
 	more := len(uids) > s.cfg.MaxMessagesPerPoll
@@ -69,15 +86,28 @@ func (s *Scheduler) sync(
 		uids = uids[:s.cfg.MaxMessagesPerPoll]
 	}
 
+	handled := make(map[uint32]time.Time, len(uids))
+	imapErr, handlerErr := s.deliver(ctx, conn, profile, cursor, uids, handled)
+	advanceConfirmed(&cursor, uids, handled)
+
+	return syncResult{cursor: imapCursor(cursor), more: more, imapErr: imapErr, handlerErr: handlerErr}
+}
+
+// deliver walks uids in fetch-sized batches and hands each message to the
+// handler, recording every confirmed one. It stops at the first failure, so the
+// caller can advance the cursor only over the confirmed prefix.
+func (s *Scheduler) deliver(
+	ctx context.Context,
+	conn mailinfra.IMAPSession,
+	profile *model.EmailProfile,
+	cursor model.IMAPCursor,
+	uids []uint32,
+	handled map[uint32]time.Time,
+) (imapErr, handlerErr error) {
 	for len(uids) > 0 {
 		batch := uids[:min(s.cfg.FetchBatchSize, len(uids))]
 		uids = uids[len(batch):]
 
-		handled := make(map[uint32]struct{}, len(batch))
-		var (
-			handlerErr error
-			maxHandled uint32
-		)
 		err := conn.FetchRaw(batch, func(message *mailinfra.IMAPMessage) {
 			if handlerErr != nil {
 				return
@@ -91,81 +121,87 @@ func (s *Scheduler) sync(
 			handlerErr = s.handler.Handle(ctx, &inbound.Message{
 				DomainID:     profile.DomainID,
 				ProfileID:    profile.ID,
-				Mailbox:      mailbox.Name,
-				UIDValidity:  mailbox.UIDValidity,
+				Mailbox:      cursor.Mailbox,
+				UIDValidity:  cursor.UIDValidity,
 				UID:          message.UID,
 				InternalDate: message.InternalDate,
+				Size:         int64(message.Size),
 				Raw:          message.Raw,
+				TooLarge:     message.TooLarge,
 			})
 			if handlerErr == nil {
-				handled[message.UID] = struct{}{}
-				maxHandled = max(maxHandled, message.UID)
+				handled[message.UID] = message.InternalDate
 			}
 		})
 		if err != nil {
-			advanceConfirmed(&cursor, batch, handled)
-			if errors.Is(err, mailinfra.ErrMessageTooLarge) {
-				return syncResult{cursor: imapCursor(cursor), handlerErr: err}
-			}
-
-			return syncResult{cursor: imapCursor(cursor), imapErr: err}
+			return err, handlerErr
 		}
 		if handlerErr != nil {
-			advanceConfirmed(&cursor, batch, handled)
-
-			return syncResult{cursor: imapCursor(cursor), handlerErr: handlerErr}
-		}
-		if maxHandled > cursor.LastUID {
-			cursor.LastUID = maxHandled
+			return nil, handlerErr
 		}
 	}
 
-	return syncResult{cursor: imapCursor(cursor), more: more}
+	return nil, nil
 }
 
-func advanceConfirmed(cursor *model.IMAPCursor, requested []uint32, handled map[uint32]struct{}) {
+// advanceConfirmed moves the cursor over the confirmed prefix only, so an email
+// that failed is read again. The checkpoint follows the same prefix.
+func advanceConfirmed(cursor *model.IMAPCursor, requested []uint32, handled map[uint32]time.Time) {
 	for _, uid := range requested {
-		if _, ok := handled[uid]; !ok {
+		date, ok := handled[uid]
+		if !ok {
 			return
 		}
 
 		cursor.LastUID = uid
+		if date.After(cursor.LastInternalDate) {
+			cursor.LastInternalDate = date
+		}
 	}
 }
 
-// searchNewUIDs collects UIDs after "after" in bounded windows, so a large backlog never lands
-// in memory at once. A sparse window is not a stop condition: only limit+1, uidNext or ctx is.
-func searchNewUIDs(ctx context.Context, conn mailinfra.IMAPSession, after, uidNext uint32, limit int) ([]uint32, error) {
-	if after == math.MaxUint32 {
+// searchRange describes what to look for: UIDs after "after", up to and
+// including "to" (zero means unbounded), optionally limited by INTERNALDATE.
+type searchRange struct {
+	after uint32
+	to    uint32
+	since time.Time
+	limit int
+}
+
+// searchUIDs collects matching UIDs in bounded windows, so neither a large
+// backlog nor a wide recovery range ever lands in memory at once. A sparse
+// window is not a stop condition: only limit+1, the upper bound or ctx is.
+func searchUIDs(ctx context.Context, conn mailinfra.IMAPSession, window searchRange) ([]uint32, error) {
+	if window.after == math.MaxUint32 {
 		return nil, nil
 	}
 
-	if uidNext == 0 {
-		return conn.SearchUIDsRange(after+1, 0)
+	start := window.after + 1
+	if window.to == 0 {
+		return conn.SearchUIDsRange(start, 0, window.since)
 	}
 
-	const window = 10_000
+	const size = 10_000
 
 	var all []uint32
-	start := after + 1
-
-	for start < uidNext {
-		end := start + window - 1
-		if end < start || end >= uidNext {
-			end = uidNext - 1
+	for start <= window.to {
+		end := start + size - 1
+		if end < start || end > window.to {
+			end = window.to
 		}
 
-		found, err := conn.SearchUIDsRange(start, end)
+		found, err := conn.SearchUIDsRange(start, end, window.since)
 		if err != nil {
 			return nil, err
 		}
 
 		all = append(all, found...)
 
-		if limit > 0 && len(all) > limit {
-			return all[:limit+1], nil
+		if window.limit > 0 && len(all) > window.limit {
+			return all[:window.limit+1], nil
 		}
-		if end+1 <= start { // end sits at the top of uint32; nothing more to search
+		if end == math.MaxUint32 { // nothing above the top of uint32
 			break
 		}
 
@@ -181,13 +217,23 @@ func searchNewUIDs(ctx context.Context, conn mailinfra.IMAPSession, after, uidNe
 	return all, nil
 }
 
+// lastSearchableUID is the highest UID worth searching, or zero when the server
+// did not report UIDNEXT and the search must stay unbounded.
+func lastSearchableUID(mailbox *mailinfra.IMAPMailbox) uint32 {
+	if mailbox.UIDNext == 0 {
+		return 0
+	}
+
+	return mailbox.UIDNext - 1
+}
+
 // lastUID returns the highest existing UID, searching when the server omitted UIDNEXT.
 func lastUID(conn mailinfra.IMAPSession, mailbox *mailinfra.IMAPMailbox) (uint32, error) {
 	if mailbox.UIDNext > 0 {
 		return mailbox.UIDNext - 1, nil
 	}
 
-	uids, err := conn.SearchUIDsRange(1, 0)
+	uids, err := conn.SearchUIDsRange(1, 0, time.Time{})
 	if err != nil || len(uids) == 0 {
 		return 0, err
 	}

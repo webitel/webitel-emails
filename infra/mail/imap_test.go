@@ -3,7 +3,6 @@ package mail
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,25 +36,29 @@ func TestReadFetchedMessageSizeLimit(t *testing.T) {
 			message := &imap.Message{
 				Uid:          7,
 				InternalDate: internalDate,
+				Size:         uint32(len(tt.raw) + 100),
 				Body: map[*imap.BodySectionName]imap.Literal{
 					responseSection: bytes.NewBufferString(tt.raw),
 				},
 			}
 
 			got, err := session.readFetchedMessage(message, requestedSection, message.Uid)
+			if err != nil {
+				t.Fatalf("readFetchedMessage: %v", err)
+			}
+			if got.TooLarge != tt.wantTooLarge {
+				t.Fatalf("TooLarge = %v, want %v", got.TooLarge, tt.wantTooLarge)
+			}
+			if got.Size != uint32(len(tt.raw)+100) {
+				t.Fatalf("Size = %d, want server-reported RFC822.SIZE %d", got.Size, len(tt.raw)+100)
+			}
 			if tt.wantTooLarge {
-				if !errors.Is(err, ErrMessageTooLarge) {
-					t.Fatalf("error = %v, want ErrMessageTooLarge", err)
-				}
-				if got != nil {
-					t.Errorf("message = %+v, want nil", got)
+				// The prefix is kept so the quarantine record can name the email.
+				if len(got.Raw) == 0 {
+					t.Error("an oversized message must still carry its prefix")
 				}
 
 				return
-			}
-
-			if err != nil {
-				t.Fatalf("readFetchedMessage: %v", err)
 			}
 			if got == nil || got.UID != message.Uid || got.InternalDate != internalDate || string(got.Raw) != tt.raw {
 				t.Errorf("message = %+v", got)
@@ -109,6 +112,25 @@ func TestFetchRawAdaptiveBatch(t *testing.T) {
 		server.serveFetch(t, "6", []testFetchMessage{{6, "six"}})
 		assertFetchResult(t, <-next, []uint32{5, 6})
 	})
+
+	t.Run("oversized message does not stop the batch", func(t *testing.T) {
+		session, server := newSelectedTestIMAPSession(t)
+		result := startFetchRaw(session, []uint32{2, 3, 4})
+
+		server.serveFetch(t, "2:4", []testFetchMessage{
+			{2, "two"},
+			{3, strings.Repeat("x", session.maxMessageSize+1)},
+			{4, "four"},
+		})
+		got := <-result
+		assertFetchResult(t, got, []uint32{2, 3, 4})
+		if len(got.tooLarge) != 1 || got.tooLarge[0] != 3 {
+			t.Fatalf("oversized UIDs = %v, want [3]", got.tooLarge)
+		}
+		if got.sizes[3] != uint32(session.maxMessageSize+1) {
+			t.Fatalf("RFC822.SIZE = %d, want %d", got.sizes[3], session.maxMessageSize+1)
+		}
+	})
 }
 
 type testFetchMessage struct {
@@ -117,18 +139,26 @@ type testFetchMessage struct {
 }
 
 type testFetchResult struct {
-	uids []uint32
-	err  error
+	uids     []uint32
+	tooLarge []uint32
+	sizes    map[uint32]uint32
+	err      error
 }
 
 func startFetchRaw(session *imapSession, uids []uint32) <-chan testFetchResult {
 	done := make(chan testFetchResult, 1)
 	go func() {
 		var fetched []uint32
+		var tooLarge []uint32
+		sizes := make(map[uint32]uint32)
 		err := session.FetchRaw(uids, func(message *IMAPMessage) {
 			fetched = append(fetched, message.UID)
+			sizes[message.UID] = message.Size
+			if message.TooLarge {
+				tooLarge = append(tooLarge, message.UID)
+			}
 		})
-		done <- testFetchResult{uids: fetched, err: err}
+		done <- testFetchResult{uids: fetched, tooLarge: tooLarge, sizes: sizes, err: err}
 	}()
 
 	return done
@@ -203,8 +233,8 @@ func (s *testIMAPServer) serveFetch(t *testing.T, wantSet string, messages []tes
 		t.Fatalf("IMAP command = %q, want UID FETCH %s", command, wantSet)
 	}
 	for sequence, message := range messages {
-		s.write(t, fmt.Sprintf("* %d FETCH (UID %d INTERNALDATE \"23-Sep-2025 10:15:00 +0000\" BODY[]<0> {%d}\r\n%s)\r\n",
-			sequence+1, message.uid, len(message.raw), message.raw))
+		s.write(t, fmt.Sprintf("* %d FETCH (UID %d INTERNALDATE \"23-Sep-2025 10:15:00 +0000\" RFC822.SIZE %d BODY[]<0> {%d}\r\n%s)\r\n",
+			sequence+1, message.uid, len(message.raw), len(message.raw), message.raw))
 	}
 	s.write(t, tag+" OK UID FETCH completed\r\n")
 }

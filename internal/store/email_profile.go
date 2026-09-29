@@ -4,7 +4,17 @@ package store
 import (
 	"context"
 
+	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
+	"google.golang.org/grpc/codes"
+
 	"github.com/webitel/webitel-emails/internal/model"
+)
+
+// ErrEmailProfileHasHistory means the profile still owns Threads or Messages.
+var ErrEmailProfileHasHistory = kiterrors.New(
+	"email profile contains email history and cannot be deleted; disable it instead",
+	kiterrors.WithID("store.email_profile.has_history"),
+	kiterrors.WithCode(codes.FailedPrecondition),
 )
 
 // EmailProfileOAuthCredentials contains encrypted OAuth values loaded only for

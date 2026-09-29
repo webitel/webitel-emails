@@ -32,6 +32,13 @@ health status through the standard gRPC health service, and registers itself in
 Consul. Database migrations are never applied automatically when the server
 starts.
 
+## Inbound email
+
+The service reads mailboxes over IMAP, parses each message and stores it as a
+Thread with its Messages. Attachments are not stored yet, so an email that
+carries any file is deliberately refused and stays in the mailbox until the
+attachment task is finished. Do not deploy this state to production on its own.
+
 Configuration can also be supplied through environment variables. For local
 development, copy `.env.example` to `.env`, adjust its values, and export them
 before running the commands without `--config_file`:

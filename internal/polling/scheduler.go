@@ -29,6 +29,7 @@ type Scheduler struct {
 	instanceID string
 	cfg        config.IMAPPollingConfig
 	runtime    store.EmailProfileRuntimeStore
+	messages   store.EmailMessageStore
 	profiles   profileSource
 	imap       mailinfra.IMAPClient
 	// When nil, new messages are only counted and the cursor does not move.
@@ -70,9 +71,10 @@ type Params struct {
 	Config     *config.Config
 	InstanceID model.InstanceID
 	Runtime    store.EmailProfileRuntimeStore
+	Messages   store.EmailMessageStore
 	Profiles   *service.EmailProfileService
 	IMAP       mailinfra.IMAPClient
-	Handler    inbound.Handler `optional:"true"`
+	Handler    inbound.Handler
 	Discovery  kitdiscovery.DiscoveryProvider
 	Log        *slog.Logger
 	Lifecycle  fx.Lifecycle
@@ -86,6 +88,7 @@ func New(p Params) *Scheduler {
 		instanceID:    string(p.InstanceID),
 		cfg:           p.Config.IMAPPolling,
 		runtime:       p.Runtime,
+		messages:      p.Messages,
 		profiles:      p.Profiles,
 		imap:          p.IMAP,
 		handler:       p.Handler,

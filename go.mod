@@ -12,6 +12,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/k3a/html2text v1.2.1
+	github.com/lib/pq v1.10.9
 	github.com/mbobakov/grpc-consul-resolver v1.5.3
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/pflag v1.0.10
