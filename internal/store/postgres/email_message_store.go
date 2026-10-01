@@ -19,6 +19,7 @@ const emailMessageColumns = `m.id,
     m.direction,
     m.kind,
     m.state,
+    m.attachment_attempts,
     m.message_id,
     m.message_id_generated,
     m.raw_sha256,
@@ -103,6 +104,79 @@ WHERE m.domain_id = $1 AND m.profile_id = $2
   AND m.raw_sha256 = $3 AND m.message_id_generated`
 
 	return locateEmailMessageIdentity(s.db.QueryRowContext(ctx, query, domainID, profileID, checksum))
+}
+
+// MarkReady completes a message only while no part of its manifest is pending.
+// Parts are all created in the first transaction and never added later, so the
+// NOT EXISTS check is exact.
+func (s *emailMessageStore) MarkReady(
+	ctx context.Context,
+	domainID, messageID int64,
+) (model.EmailMessageState, error) {
+	// The state is read back in the same statement, so a message a concurrent
+	// delivery has just completed is not mistaken for an unfinished one.
+	const query = `
+WITH completed AS (
+    UPDATE email.message m SET
+        state = 'ready',
+        updated_at = now()
+    WHERE m.domain_id = $1 AND m.id = $2 AND m.state = 'processing'
+        AND NOT EXISTS (
+            SELECT 1 FROM email.message_attachment a
+            WHERE a.domain_id = m.domain_id AND a.message_id = m.id AND a.state = 'pending'
+        )
+    RETURNING m.state
+)
+SELECT COALESCE(
+    (SELECT state FROM completed),
+    (SELECT state FROM email.message WHERE domain_id = $1 AND id = $2)
+)`
+
+	var state sql.NullString
+	if err := s.db.QueryRowContext(ctx, query, domainID, messageID).Scan(&state); err != nil {
+		return "", ParseError(err)
+	}
+
+	return model.EmailMessageState(state.String), nil
+}
+
+func (s *emailMessageStore) MarkFailed(ctx context.Context, domainID, messageID int64) (bool, error) {
+	const query = `
+UPDATE email.message SET
+    state = 'failed',
+    updated_at = now()
+WHERE domain_id = $1 AND id = $2 AND state = 'processing'`
+
+	result, err := s.db.ExecContext(ctx, query, domainID, messageID)
+	if err != nil {
+		return false, ParseError(err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return affected > 0, nil
+}
+
+func (s *emailMessageStore) IncrementAttachmentAttempts(
+	ctx context.Context,
+	domainID, messageID int64,
+) (int32, error) {
+	const query = `
+UPDATE email.message SET
+    attachment_attempts = attachment_attempts + 1,
+    updated_at = now()
+WHERE domain_id = $1 AND id = $2 AND state = 'processing'
+RETURNING attachment_attempts`
+
+	var attempts int32
+	if err := s.db.QueryRowContext(ctx, query, domainID, messageID).Scan(&attempts); err != nil {
+		return 0, ParseError(err)
+	}
+
+	return attempts, nil
 }
 
 func (s *emailMessageStore) LastReceivedAt(ctx context.Context, domainID, profileID int64) (time.Time, error) {
@@ -253,6 +327,7 @@ func scanEmailMessage(row rowScanner) (*model.EmailMessage, error) {
 		&direction,
 		&kind,
 		&state,
+		&message.AttachmentAttempts,
 		&message.MessageID,
 		&message.MessageIDGenerated,
 		&message.RawSHA256,

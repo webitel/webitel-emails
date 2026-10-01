@@ -219,7 +219,7 @@ func TestMIMEParserAttachmentLimits(t *testing.T) {
 		maxTotal     int64
 		maxCount     int
 		wantSkipped  int
-		wantReason   string
+		wantReason   model.EmailPartSkippedReason
 		wantAccepted int
 	}{
 		{
@@ -229,7 +229,7 @@ func TestMIMEParserAttachmentLimits(t *testing.T) {
 			maxTotal:     10,
 			maxCount:     3,
 			wantSkipped:  0,
-			wantReason:   partSkippedSizeLimit,
+			wantReason:   model.EmailPartSkippedSizeLimit,
 			wantAccepted: 0,
 		},
 		{
@@ -239,7 +239,7 @@ func TestMIMEParserAttachmentLimits(t *testing.T) {
 			maxTotal:     6,
 			maxCount:     3,
 			wantSkipped:  1,
-			wantReason:   partSkippedTotalLimit,
+			wantReason:   model.EmailPartSkippedTotalLimit,
 			wantAccepted: 1,
 		},
 		{
@@ -249,7 +249,7 @@ func TestMIMEParserAttachmentLimits(t *testing.T) {
 			maxTotal:     10,
 			maxCount:     1,
 			wantSkipped:  1,
-			wantReason:   partSkippedCountLimit,
+			wantReason:   model.EmailPartSkippedCountLimit,
 			wantAccepted: 1,
 		},
 	}

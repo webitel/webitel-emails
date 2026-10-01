@@ -28,11 +28,6 @@ const (
 	maxHeaderTextRunes = 255
 	maxMessageIDBytes  = 998
 	maxReferencesBytes = 32 << 10
-
-	partSkippedCountLimit = "attachment_count_limit_exceeded"
-	partSkippedSizeLimit  = "attachment_size_limit_exceeded"
-	partSkippedTotalLimit = "attachments_total_size_limit_exceeded"
-	partSkippedReadError  = "attachment_read_error"
 )
 
 // MIMEParser converts raw RFC822 messages into the internal email model.
@@ -118,6 +113,7 @@ func (p *MIMEParser) parse(ctx context.Context, message *Message) (*model.Parsed
 	parsed := &model.ParsedEmail{
 		DomainID:           message.DomainID,
 		ProfileID:          message.ProfileID,
+		Assignment:         message.Assignment,
 		Mailbox:            message.Mailbox,
 		UIDValidity:        message.UIDValidity,
 		UID:                message.UID,
@@ -199,13 +195,13 @@ func (p *MIMEParser) parseMIMEParts(ctx context.Context, entity *gomessage.Entit
 			emailPart.Size = size
 			switch {
 			case readErr != nil:
-				emailPart.SkippedReason = partSkippedReadError
+				emailPart.SkippedReason = model.EmailPartSkippedReadError
 			case acceptedParts >= p.maxAttachments:
-				emailPart.SkippedReason = partSkippedCountLimit
+				emailPart.SkippedReason = model.EmailPartSkippedCountLimit
 			case size > p.maxAttachmentSize:
-				emailPart.SkippedReason = partSkippedSizeLimit
+				emailPart.SkippedReason = model.EmailPartSkippedSizeLimit
 			case size > p.maxAttachmentsTotalSize-acceptedSize:
-				emailPart.SkippedReason = partSkippedTotalLimit
+				emailPart.SkippedReason = model.EmailPartSkippedTotalLimit
 			default:
 				emailPart.Content = content
 				acceptedParts++

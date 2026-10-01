@@ -297,6 +297,8 @@ func TestDeduplicationAcrossIdentities(t *testing.T) {
 			testhelpers.Reset(t, db)
 			profileID = testhelpers.SeedProfile(t, db, 1, "owner")
 			tt.first.ProfileID, tt.second.ProfileID = profileID, profileID
+			tt.first.Assignment = testhelpers.Assignment(1, profileID)
+			tt.second.Assignment = testhelpers.Assignment(1, profileID)
 
 			if err := handler.Handle(context.Background(), tt.first); err != nil {
 				t.Fatalf("first delivery: %v", err)

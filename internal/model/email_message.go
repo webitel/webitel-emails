@@ -52,6 +52,8 @@ type EmailMessage struct {
 	Direction EmailMessageDirection
 	Kind      EmailKind
 	State     EmailMessageState
+	// AttachmentAttempts counts the failed attempts to finish the attachments.
+	AttachmentAttempts int32
 
 	MessageID string
 	// True when the MIME parser had to generate the identifier itself.

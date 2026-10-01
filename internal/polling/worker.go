@@ -54,7 +54,7 @@ func (s *Scheduler) poll(ctx context.Context, runtime *model.EmailProfileRuntime
 		return
 	}
 
-	synced := s.sync(ctx, conn, profile, runtime.ProviderCursor, log)
+	synced := s.sync(ctx, conn, profile, assignment, runtime.ProviderCursor, log)
 	if synced.imapErr != nil {
 		s.dropSession(assignment.ProfileID, false)
 		log.Warn("imap mailbox sync failed", "err", synced.imapErr)

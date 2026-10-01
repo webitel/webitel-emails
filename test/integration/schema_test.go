@@ -4,8 +4,11 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/webitel/webitel-emails/internal/model"
 
 	"github.com/webitel/webitel-emails/test/integration/testhelpers"
 )
@@ -71,6 +74,7 @@ VALUES (1, $1, 'service', 'processed', $2)`, owner, completed); err != nil {
 			"email.message_in_reply_to_idx",
 			"email.recipient_domain_normalized_address_idx",
 			"email.inbound_failure_profile_created_idx",
+			"email.message_attachment_message_position_uniq",
 		}
 		for _, index := range indexes {
 			var exists bool
@@ -127,4 +131,114 @@ VALUES (1, $1, 'INBOX', 10, 5, 'mime_parse', 'failed to parse MIME message')`, n
 			t.Fatal("quarantine rows survived their profile")
 		}
 	})
+}
+
+// The attachment manifest is what makes the lifecycle of a part unforgeable, so
+// its constraints are checked against the real schema rather than trusted.
+func TestAttachmentManifestConstraints(t *testing.T) {
+	db := testhelpers.Database(t)
+	testhelpers.Reset(t, db)
+
+	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
+	thread := seedThread(t, db, 1, profileID, "regular", "new", nil)
+
+	var messageID int64
+	if err := db.QueryRowContext(context.Background(), `
+INSERT INTO email.message (domain_id, thread_id, profile_id, direction, message_id, received_at)
+VALUES (1, $1, $2, 'inbound', '<manifest@x>', now()) RETURNING id`, thread, profileID).Scan(&messageID); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	insert := func(domainID int64, columns, values string) error {
+		query := fmt.Sprintf(`
+INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position%s)
+VALUES ($1, $2, 'attachment', 'a.pdf', 'application/pdf', 1, $3%s)`, columns, values)
+		_, err := db.ExecContext(context.Background(), query, domainID, messageID, nextPosition())
+
+		return err
+	}
+
+	rejected := []struct {
+		name    string
+		columns string
+		values  string
+	}{
+		{"pending part carrying a file", ", file_id", ", 7"},
+		{"stored part without a file", ", state", ", 'stored'"},
+		{"skipped part without a reason", ", state", ", 'skipped'"},
+		{"skipped part carrying a file", ", state, skipped_reason, file_id", ", 'skipped', 'attachment_read_error', 7"},
+		{"unknown skip reason", ", state, skipped_reason", ", 'skipped', 'because'"},
+		{"unknown disposition", ", disposition", ", 'embedded'"},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := insert(1, tt.columns, tt.values); err == nil {
+				t.Fatal("the database accepted an impossible manifest row")
+			}
+		})
+	}
+
+	// Every reason the parser can produce must satisfy the CHECK: the Go constants
+	// and the SQL list are two sources that must not drift apart.
+	t.Run("every parser skip reason is storable", func(t *testing.T) {
+		reasons := []model.EmailPartSkippedReason{
+			model.EmailPartSkippedCountLimit,
+			model.EmailPartSkippedSizeLimit,
+			model.EmailPartSkippedTotalLimit,
+			model.EmailPartSkippedReadError,
+		}
+		for _, reason := range reasons {
+			if err := insert(1, ", state, skipped_reason", fmt.Sprintf(", 'skipped', '%s'", reason)); err != nil {
+				t.Errorf("reason %s was refused by the schema: %v", reason, err)
+			}
+		}
+	})
+
+	t.Run("a part cannot belong to a message of another tenant", func(t *testing.T) {
+		if err := insert(2, "", ""); err == nil {
+			t.Fatal("a part of another domain was accepted")
+		}
+	})
+
+	t.Run("one position holds one part", func(t *testing.T) {
+		if _, err := db.ExecContext(context.Background(), `
+INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position)
+VALUES (1, $1, 'attachment', 'first.pdf', 'application/pdf', 1, 100)`, messageID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(context.Background(), `
+INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position)
+VALUES (1, $1, 'attachment', 'second.pdf', 'application/pdf', 1, 100)`, messageID); err == nil {
+			t.Fatal("two parts share one position")
+		}
+	})
+
+	t.Run("a negative attachment attempt count is refused", func(t *testing.T) {
+		if _, err := db.ExecContext(context.Background(),
+			`UPDATE email.message SET attachment_attempts = -1 WHERE id = $1`, messageID); err == nil {
+			t.Fatal("a negative attempt count was accepted")
+		}
+	})
+
+	t.Run("deleting the message removes its manifest", func(t *testing.T) {
+		if count(t, db, `SELECT count(*) FROM email.message_attachment`) == 0 {
+			t.Fatal("no manifest rows to delete")
+		}
+		if _, err := db.ExecContext(context.Background(),
+			`DELETE FROM email.message WHERE id = $1`, messageID); err != nil {
+			t.Fatal(err)
+		}
+		if count(t, db, `SELECT count(*) FROM email.message_attachment`) != 0 {
+			t.Fatal("manifest rows survived their message")
+		}
+	})
+}
+
+// nextPosition keeps every accepted row at a position of its own.
+var manifestPosition int
+
+func nextPosition() int {
+	manifestPosition++
+
+	return manifestPosition
 }

@@ -51,3 +51,8 @@ mime:
   max_attachment_size: 10485760
   max_attachments_total_size: 20971520
   max_attachments: 15
+
+storage:
+  upload_timeout: 2m
+  max_concurrent_uploads: 20
+  max_attachment_attempts: 3

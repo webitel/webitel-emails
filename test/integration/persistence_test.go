@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/webitel/webitel-emails/config"
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/model"
 	storepostgres "github.com/webitel/webitel-emails/internal/store/postgres"
@@ -19,10 +20,13 @@ import (
 )
 
 func newHandler(db *sql.DB) *inbound.PersistenceHandler {
-	return inbound.NewPersistenceHandler(
-		storepostgres.NewUnitOfWork(db),
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	uow := storepostgres.NewUnitOfWork(db)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
+
+	completer := inbound.NewMessageCompleter(uow, nil, cfg, log)
+
+	return inbound.NewPersistenceHandler(uow, completer, log)
 }
 
 type emailOption func(*model.ParsedEmail)
@@ -45,7 +49,8 @@ func newEmail(profileID int64, messageID string, uid uint32, options ...emailOpt
 
 	email := &model.ParsedEmail{
 		DomainID: 1, ProfileID: profileID,
-		Mailbox: "INBOX", UIDValidity: 10, UID: uid,
+		Assignment: testhelpers.Assignment(1, profileID),
+		Mailbox:    "INBOX", UIDValidity: 10, UID: uid,
 		MessageID: messageID, RawSHA256: checksum[:],
 		Subject: "Subject " + messageID, Kind: model.EmailKindRegular,
 		TextBody: "text", HTMLBody: "<p>text</p>",

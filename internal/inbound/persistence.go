@@ -5,24 +5,32 @@ import (
 	"fmt"
 	"log/slog"
 
-	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
-
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
-// PersistenceHandler stores a parsed email as a Message of a Thread.
-// A redelivery of an already stored email succeeds without writing anything.
+// PersistenceHandler stores a parsed email as a Message of a Thread. A
+// redelivery of a finished email writes nothing; a redelivery of an unfinished
+// one continues its attachments.
 type PersistenceHandler struct {
-	uow store.UnitOfWork
-	log *slog.Logger
+	uow       store.UnitOfWork
+	completer *MessageCompleter
+	log       *slog.Logger
 }
 
 var _ ParsedMessageHandler = (*PersistenceHandler)(nil)
 
 // NewPersistenceHandler creates the handler that owns the persistence transaction.
-func NewPersistenceHandler(uow store.UnitOfWork, log *slog.Logger) *PersistenceHandler {
-	return &PersistenceHandler{uow: uow, log: log.With("component", "inbound_persistence")}
+func NewPersistenceHandler(
+	uow store.UnitOfWork,
+	completer *MessageCompleter,
+	log *slog.Logger,
+) *PersistenceHandler {
+	return &PersistenceHandler{
+		uow:       uow,
+		completer: completer,
+		log:       log.With("component", "inbound_persistence"),
+	}
 }
 
 // Handle writes the email, or confirms that it is already stored. Returning nil
@@ -32,10 +40,17 @@ func (h *PersistenceHandler) Handle(ctx context.Context, parsed *model.ParsedEma
 		return fmt.Errorf("persistence: parsed email is required")
 	}
 
-	return h.uow.WithinTransaction(ctx, func(ctx context.Context, uow store.UnitOfWork) error {
+	// Set when the email still has attachments to upload, which happens after
+	// the transaction below has committed.
+	var unfinished *storedMessage
+
+	err := h.uow.WithinTransaction(ctx, func(ctx context.Context, uow store.UnitOfWork) error {
 		// Held until the transaction ends, so a concurrent delivery of the same
 		// conversation cannot resolve its Thread against a half-written one.
 		if err := uow.LockEmailProfile(ctx, parsed.ProfileID); err != nil {
+			return err
+		}
+		if err := uow.EnsureEmailProfileAssignment(ctx, parsed.Assignment); err != nil {
 			return err
 		}
 
@@ -44,32 +59,85 @@ func (h *PersistenceHandler) Handle(ctx context.Context, parsed *model.ParsedEma
 			return err
 		}
 		if stored != nil {
+			if stored.State == model.EmailMessageStateProcessing {
+				unfinished = &storedMessage{
+					ID:       stored.ID,
+					ThreadID: stored.ThreadID,
+				}
+				h.log.Info("continuing an unfinished inbound email",
+					"domain_id", parsed.DomainID,
+					"profile_id", parsed.ProfileID,
+					"message_id", stored.ID,
+					"thread_id", stored.ThreadID,
+				)
+
+				return nil
+			}
+
 			return h.duplicateOutcome(parsed, stored)
 		}
 
-		return h.persist(ctx, uow, parsed)
+		unfinished, err = h.persist(ctx, uow, parsed)
+
+		return err
 	})
+	if err != nil || unfinished == nil {
+		return err
+	}
+
+	return h.completer.Complete(ctx, parsed, *unfinished)
 }
 
-func (h *PersistenceHandler) persist(ctx context.Context, uow store.UnitOfWork, parsed *model.ParsedEmail) error {
+// persist writes the Thread, the Message, its recipients and the whole
+// attachment manifest. A Message with a part to upload stays processing and is
+// returned for completion; anything else is ready at once, as before.
+func (h *PersistenceHandler) persist(
+	ctx context.Context,
+	uow store.UnitOfWork,
+	parsed *model.ParsedEmail,
+) (*storedMessage, error) {
 	thread, err := resolveThread(ctx, uow, parsed)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	attachments := buildAttachments(parsed)
+	unfinished := storedMessage{
+		ThreadID: thread.ID,
+	}
+
+	// The email stays invisible while it still has a file to upload.
+	state := model.EmailMessageStateReady
+	if hasPendingAttachments(attachments) {
+		state = model.EmailMessageStateProcessing
 	}
 
 	// A conflict here means a delivery slipped past both the lookup and the
 	// lock. Returning it rolls back this Thread too, so nothing is left behind;
 	// the next delivery finds the stored email and finishes as a duplicate.
-	message, err := uow.EmailMessageStore().Create(ctx, buildMessage(parsed, thread.ID))
+	message, err := uow.EmailMessageStore().Create(ctx, buildMessage(parsed, thread.ID, state))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := uow.EmailRecipientStore().CreateBulk(ctx, parsed.DomainID, message.ID, buildRecipients(parsed)); err != nil {
-		return err
+		return nil, err
 	}
 
-	return uow.EmailThreadStore().AdvanceLastMessage(
+	if err := uow.EmailMessageAttachmentStore().CreateBulk(
+		ctx, parsed.DomainID, message.ID, attachments,
+	); err != nil {
+		return nil, err
+	}
+
+	if state == model.EmailMessageStateProcessing {
+		// The Thread advances only when the Message becomes visible.
+		unfinished.ID = message.ID
+
+		return &unfinished, nil
+	}
+
+	return nil, uow.EmailThreadStore().AdvanceLastMessage(
 		ctx, parsed.DomainID, parsed.ProfileID, thread.ID, message.ReceivedAt,
 	)
 }
@@ -210,19 +278,12 @@ func locateStored(
 	return messages.LocateByRawChecksum(ctx, parsed.DomainID, parsed.ProfileID, parsed.RawSHA256)
 }
 
-// duplicateOutcome confirms an already finished email and refuses to confirm an
-// unfinished one, so a half-written email is never passed by the cursor.
+// duplicateOutcome confirms an email that is already finished, successfully or
+// not. An unfinished one never reaches here: it is continued instead.
 func (h *PersistenceHandler) duplicateOutcome(
 	parsed *model.ParsedEmail,
 	stored *store.EmailMessageIdentity,
 ) error {
-	if stored.State == model.EmailMessageStateProcessing {
-		return kiterrors.New(
-			"email message is still being processed",
-			kiterrors.WithID("inbound.persistence.unfinished_message"),
-		)
-	}
-
 	// The identifiers are the idempotent result; task 8 writes the Outbox row
 	// from them inside this same transaction.
 	h.log.Debug("inbound email is already stored",
@@ -236,14 +297,18 @@ func (h *PersistenceHandler) duplicateOutcome(
 	return nil
 }
 
-func buildMessage(parsed *model.ParsedEmail, threadID int64) *model.EmailMessage {
+func buildMessage(
+	parsed *model.ParsedEmail,
+	threadID int64,
+	state model.EmailMessageState,
+) *model.EmailMessage {
 	message := &model.EmailMessage{
 		DomainID:           parsed.DomainID,
 		ThreadID:           threadID,
 		ProfileID:          parsed.ProfileID,
 		Direction:          model.EmailMessageDirectionInbound,
 		Kind:               parsed.Kind,
-		State:              model.EmailMessageStateReady,
+		State:              state,
 		MessageID:          parsed.MessageID,
 		MessageIDGenerated: parsed.MessageIDGenerated,
 		RawSHA256:          parsed.RawSHA256,
@@ -265,6 +330,43 @@ func buildMessage(parsed *model.ParsedEmail, threadID int64) *model.EmailMessage
 	}
 
 	return message
+}
+
+// buildAttachments turns the parsed parts into the manifest, keeping their
+// order. A part the parser skipped is recorded with its reason and never
+// uploaded; everything else starts as pending.
+func buildAttachments(parsed *model.ParsedEmail) []*model.EmailMessageAttachment {
+	attachments := make([]*model.EmailMessageAttachment, 0, len(parsed.Parts))
+	for index, part := range parsed.Parts {
+		attachment := &model.EmailMessageAttachment{
+			DomainID:      parsed.DomainID,
+			ContentID:     part.ContentID,
+			Disposition:   part.Disposition,
+			FileName:      part.Name,
+			MimeType:      part.ContentType,
+			Size:          part.Size,
+			Position:      int32(index),
+			State:         model.EmailAttachmentStatePending,
+			SkippedReason: part.SkippedReason,
+		}
+		if part.SkippedReason != "" {
+			attachment.State = model.EmailAttachmentStateSkipped
+		}
+
+		attachments = append(attachments, attachment)
+	}
+
+	return attachments
+}
+
+func hasPendingAttachments(attachments []*model.EmailMessageAttachment) bool {
+	for _, attachment := range attachments {
+		if attachment.State == model.EmailAttachmentStatePending {
+			return true
+		}
+	}
+
+	return false
 }
 
 // buildRecipients flattens the address headers, keeping each address under its

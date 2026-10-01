@@ -25,6 +25,15 @@ type Config struct {
 	ProfileDistribution ProfileDistributionConfig `mapstructure:"profile_distribution"`
 	IMAPPolling         IMAPPollingConfig         `mapstructure:"imap_polling"`
 	MIME                MIMEConfig                `mapstructure:"mime"`
+	Storage             StorageConfig             `mapstructure:"storage"`
+}
+
+// StorageConfig tunes attachment uploads to the storage service.
+type StorageConfig struct {
+	UploadTimeout        time.Duration `mapstructure:"upload_timeout"`
+	MaxConcurrentUploads int           `mapstructure:"max_concurrent_uploads"`
+	// Attempts to finish the attachments of one email before it is quarantined.
+	MaxAttachmentAttempts int32 `mapstructure:"max_attachment_attempts"`
 }
 
 // MIMEConfig limits the decoded email content kept by the MIME parser.
@@ -158,6 +167,11 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Int64("mime.max_attachment_size", 10<<20, "maximum decoded size of one accepted attachment in bytes")
 	flags.Int64("mime.max_attachments_total_size", 20<<20, "maximum total decoded size of accepted attachments in one email")
 	flags.Int("mime.max_attachments", 15, "maximum accepted attachments in one email")
+
+	flags.Duration("storage.upload_timeout", 2*time.Minute, "maximum duration of one attachment upload to storage")
+	flags.Int("storage.max_concurrent_uploads", 20, "maximum attachment uploads to storage running at the same time")
+	flags.Int32("storage.max_attachment_attempts", 3, "attempts to upload the attachments of one email before it is quarantined")
+
 }
 
 func (c *Config) validate() error {
@@ -182,7 +196,9 @@ func (c *Config) validate() error {
 	if err := c.MIME.validate(c.IMAPPolling.MaxMessageSize); err != nil {
 		return err
 	}
-
+	if err := c.Storage.validate(); err != nil {
+		return err
+	}
 	if err := c.validateMigrate(); err != nil {
 		return err
 	}
@@ -251,6 +267,20 @@ func (c MIMEConfig) validate(maxMessageSize int64) error {
 	}
 	if c.MaxAttachments < 1 {
 		return fmt.Errorf("config: mime.max_attachments must be at least 1")
+	}
+
+	return nil
+}
+
+func (c StorageConfig) validate() error {
+	if c.UploadTimeout <= 0 {
+		return fmt.Errorf("config: storage.upload_timeout must be positive")
+	}
+	if c.MaxConcurrentUploads < 1 {
+		return fmt.Errorf("config: storage.max_concurrent_uploads must be at least 1")
+	}
+	if c.MaxAttachmentAttempts < 1 {
+		return fmt.Errorf("config: storage.max_attachment_attempts must be at least 1")
 	}
 
 	return nil

@@ -37,6 +37,10 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 	if cfg.Pubsub.Driver != "rabbitmq" {
 		t.Errorf("pubsub.driver = %q, want rabbitmq", cfg.Pubsub.Driver)
 	}
+	if cfg.Storage.UploadTimeout != 2*time.Minute || cfg.Storage.MaxConcurrentUploads != 20 ||
+		cfg.Storage.MaxAttachmentAttempts != 3 {
+		t.Errorf("storage defaults = %+v", cfg.Storage)
+	}
 }
 
 func TestLoadServerConfigPrecedence(t *testing.T) {
@@ -183,6 +187,11 @@ func TestConfigValidate(t *testing.T) {
 			MaxAttachmentsTotalSize: 20 << 20,
 			MaxAttachments:          15,
 		},
+		Storage: StorageConfig{
+			UploadTimeout:         2 * time.Minute,
+			MaxConcurrentUploads:  20,
+			MaxAttachmentAttempts: 3,
+		},
 	}
 
 	tests := []struct {
@@ -267,6 +276,9 @@ func clearConfigEnvironment(t *testing.T) {
 		"MIME_MAX_ATTACHMENT_SIZE",
 		"MIME_MAX_ATTACHMENTS_TOTAL_SIZE",
 		"MIME_MAX_ATTACHMENTS",
+		"STORAGE_UPLOAD_TIMEOUT",
+		"STORAGE_MAX_CONCURRENT_UPLOADS",
+		"STORAGE_MAX_ATTACHMENT_ATTEMPTS",
 	} {
 		t.Setenv(name, "")
 	}

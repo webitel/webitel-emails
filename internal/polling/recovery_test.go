@@ -40,7 +40,7 @@ func TestRecoveryReadsOnlyThePartAfterTheCheckpoint(t *testing.T) {
 		},
 	}
 
-	result := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, checkpoint), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, checkpoint), testLogger())
 
 	if result.imapErr != nil || result.handlerErr != nil {
 		t.Fatalf("imapErr=%v handlerErr=%v", result.imapErr, result.handlerErr)
@@ -87,7 +87,7 @@ func TestRecoveryResumesAcrossPolls(t *testing.T) {
 		datesByUID:    dates,
 	}
 
-	first := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, checkpoint), testLogger())
+	first := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, checkpoint), testLogger())
 	if first.imapErr != nil || first.handlerErr != nil {
 		t.Fatalf("first poll: %v %v", first.imapErr, first.handlerErr)
 	}
@@ -106,7 +106,7 @@ func TestRecoveryResumesAcrossPolls(t *testing.T) {
 
 	// The second poll continues from the saved progress instead of starting over.
 	session.fetchedUIDs = nil
-	second := scheduler.sync(context.Background(), session, testProfile(), first.cursor, testLogger())
+	second := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), first.cursor, testLogger())
 	if len(session.fetchedUIDs) != 2 || session.fetchedUIDs[0] != 3 || session.fetchedUIDs[1] != 4 {
 		t.Fatalf("second poll downloaded %v, want [3 4]", session.fetchedUIDs)
 	}
@@ -118,7 +118,7 @@ func TestRecoveryResumesAcrossPolls(t *testing.T) {
 	}
 
 	session.fetchedUIDs = nil
-	third := scheduler.sync(context.Background(), session, testProfile(), second.cursor, testLogger())
+	third := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), second.cursor, testLogger())
 	if len(session.fetchedUIDs) != 1 || session.fetchedUIDs[0] != 5 {
 		t.Fatalf("third poll downloaded %v, want [5]", session.fetchedUIDs)
 	}
@@ -144,7 +144,7 @@ func TestRecoveryResumesAfterTransientError(t *testing.T) {
 		},
 	}
 
-	failed := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, checkpoint), testLogger())
+	failed := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, checkpoint), testLogger())
 	if !errors.Is(failed.handlerErr, errTransientTest) {
 		t.Fatalf("handler error = %v, want transient failure", failed.handlerErr)
 	}
@@ -153,7 +153,7 @@ func TestRecoveryResumesAfterTransientError(t *testing.T) {
 	}
 
 	session.fetchedUIDs = nil
-	retried := scheduler.sync(context.Background(), session, testProfile(), failed.cursor, testLogger())
+	retried := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), failed.cursor, testLogger())
 	if retried.imapErr != nil || retried.handlerErr != nil {
 		t.Fatalf("retry: imap=%v handler=%v", retried.imapErr, retried.handlerErr)
 	}
@@ -180,14 +180,14 @@ func TestRecoveryKeepsCheckpointWhenUIDValidityChangesAgain(t *testing.T) {
 		},
 	}
 
-	first := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, checkpoint), testLogger())
+	first := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, checkpoint), testLogger())
 	if first.cursor.IMAP.Recovery == nil {
 		t.Fatal("first recovery finished too early")
 	}
 
 	session.uidValidity = 12
 	session.availableUIDs = []uint32{1, 2, 3, 4}
-	second := scheduler.sync(context.Background(), session, testProfile(), first.cursor, testLogger())
+	second := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), first.cursor, testLogger())
 	if second.imapErr != nil || second.handlerErr != nil {
 		t.Fatalf("second recovery: imap=%v handler=%v", second.imapErr, second.handlerErr)
 	}
@@ -216,7 +216,7 @@ func TestRecoveryKeepsEmailsSharingTheCheckpointTimestamp(t *testing.T) {
 		datesByUID:    map[uint32]time.Time{1: checkpoint, 2: checkpoint},
 	}
 
-	result := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, checkpoint), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, checkpoint), testLogger())
 	if result.imapErr != nil || result.handlerErr != nil {
 		t.Fatalf("imapErr=%v handlerErr=%v", result.imapErr, result.handlerErr)
 	}
@@ -241,7 +241,7 @@ func TestRecoveryFallsBackToTheNewestStoredEmail(t *testing.T) {
 	}
 
 	// The cursor predates recovery support, so it carries no checkpoint of its own.
-	result := scheduler.sync(context.Background(), session, testProfile(), storedCursor(7, time.Time{}), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), storedCursor(7, time.Time{}), testLogger())
 	if result.imapErr != nil || result.handlerErr != nil {
 		t.Fatalf("imapErr=%v handlerErr=%v", result.imapErr, result.handlerErr)
 	}
@@ -256,7 +256,7 @@ func TestRecoveryWithoutAnyCheckpointStartsAtTheEnd(t *testing.T) {
 
 	// Nothing was ever confirmed, so there is no gap and no history to import.
 	stored := storedCursor(0, time.Time{})
-	result := scheduler.sync(context.Background(), session, testProfile(), stored, testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), stored, testLogger())
 
 	if result.cursor.IMAP.Recovery != nil {
 		t.Fatalf("recovery started without a checkpoint: %+v", result.cursor.IMAP.Recovery)

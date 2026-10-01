@@ -10,8 +10,10 @@ import (
 
 // Message is one raw RFC822 email identified by its IMAP position.
 type Message struct {
-	DomainID     int64
-	ProfileID    int64
+	DomainID  int64
+	ProfileID int64
+	// Assignment is the ownership token of the poll that fetched this email.
+	Assignment   model.EmailProfileAssignment
 	Mailbox      string
 	UIDValidity  uint32
 	UID          uint32

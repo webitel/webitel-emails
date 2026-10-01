@@ -12,16 +12,23 @@ import (
 // fakeStore is an in-memory stand-in for the storage layer. It records the order
 // of operations so a test can assert that the profile lock comes first.
 type fakeStore struct {
-	threads    []*model.EmailThread
-	messages   []*model.EmailMessage
-	recipients map[int64][]*model.EmailRecipient
-	nextID     int64
-	calls      []string
-	messageErr error
+	threads     []*model.EmailThread
+	messages    []*model.EmailMessage
+	recipients  map[int64][]*model.EmailRecipient
+	attachments map[int64][]*model.EmailMessageAttachment
+	failures    []*model.InboundFailure
+	nextID      int64
+	calls       []string
+	messageErr  error
+	// staleAssignment makes every fenced check report a lost profile.
+	staleAssignment bool
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{recipients: make(map[int64][]*model.EmailRecipient)}
+	return &fakeStore{
+		recipients:  make(map[int64][]*model.EmailRecipient),
+		attachments: make(map[int64][]*model.EmailMessageAttachment),
+	}
 }
 
 var _ store.UnitOfWork = (*fakeStore)(nil)
@@ -59,6 +66,35 @@ func (f *fakeStore) EmailThreadStore() store.EmailThreadStore       { return fak
 func (f *fakeStore) EmailMessageStore() store.EmailMessageStore     { return fakeMessageStore{f} }
 func (f *fakeStore) EmailRecipientStore() store.EmailRecipientStore { return fakeRecipientStore{f} }
 
+func (f *fakeStore) EmailMessageAttachmentStore() store.EmailMessageAttachmentStore {
+	return fakeAttachmentStore{f}
+}
+
+func (f *fakeStore) InboundFailureStore() store.InboundFailureStore { return fakeFailureStore{f} }
+
+func (f *fakeStore) EnsureEmailProfileAssignment(
+	context.Context,
+	model.EmailProfileAssignment,
+) error {
+	f.record("ensure_assignment")
+
+	if f.staleAssignment {
+		return store.ErrStaleEmailProfileAssignment
+	}
+
+	return nil
+}
+
+func (f *fakeStore) messageByID(id int64) *model.EmailMessage {
+	for _, message := range f.messages {
+		if message.ID == id {
+			return message
+		}
+	}
+
+	return nil
+}
+
 func (f *fakeStore) threadByID(id int64, lookup store.EmailThreadLookup) *model.EmailThread {
 	for _, thread := range f.threads {
 		if thread.ID != id {
@@ -76,9 +112,11 @@ func (f *fakeStore) threadByID(id int64, lookup store.EmailThreadLookup) *model.
 
 func (f *fakeStore) findMessage(match func(*model.EmailMessage) bool) *store.EmailMessageIdentity {
 	for _, message := range f.messages {
-		if match(message) {
-			return &store.EmailMessageIdentity{ID: message.ID, ThreadID: message.ThreadID, State: message.State}
+		if !match(message) {
+			continue
 		}
+
+		return &store.EmailMessageIdentity{ID: message.ID, ThreadID: message.ThreadID, State: message.State}
 	}
 
 	return nil
@@ -194,6 +232,56 @@ func (f fakeMessageStore) Create(_ context.Context, message *model.EmailMessage)
 	return &created, nil
 }
 
+func (f fakeMessageStore) MarkReady(
+	_ context.Context,
+	_, messageID int64,
+) (model.EmailMessageState, error) {
+	f.record("mark_ready")
+
+	message := f.messageByID(messageID)
+	if message == nil {
+		return "", nil
+	}
+	if message.State != model.EmailMessageStateProcessing {
+		return message.State, nil
+	}
+	for _, attachment := range f.attachments[messageID] {
+		if attachment.State == model.EmailAttachmentStatePending {
+			return model.EmailMessageStateProcessing, nil
+		}
+	}
+	message.State = model.EmailMessageStateReady
+
+	return message.State, nil
+}
+
+func (f fakeMessageStore) MarkFailed(_ context.Context, _, messageID int64) (bool, error) {
+	f.record("mark_failed")
+
+	message := f.messageByID(messageID)
+	if message == nil || message.State != model.EmailMessageStateProcessing {
+		return false, nil
+	}
+	message.State = model.EmailMessageStateFailed
+
+	return true, nil
+}
+
+func (f fakeMessageStore) IncrementAttachmentAttempts(
+	_ context.Context,
+	_, messageID int64,
+) (int32, error) {
+	f.record("increment_attempts")
+
+	message := f.messageByID(messageID)
+	if message == nil {
+		return 0, nil
+	}
+	message.AttachmentAttempts++
+
+	return message.AttachmentAttempts, nil
+}
+
 func (f fakeMessageStore) LocateByMessageID(
 	_ context.Context,
 	domainID, profileID int64,
@@ -243,6 +331,66 @@ func (f fakeRecipientStore) CreateBulk(
 ) error {
 	f.record("create_recipients")
 	f.recipients[messageID] = append(f.recipients[messageID], recipients...)
+
+	return nil
+}
+
+type fakeAttachmentStore struct{ *fakeStore }
+
+var _ store.EmailMessageAttachmentStore = fakeAttachmentStore{}
+
+func (f fakeAttachmentStore) CreateBulk(
+	_ context.Context,
+	_, messageID int64,
+	attachments []*model.EmailMessageAttachment,
+) error {
+	f.record("create_attachments")
+	for _, attachment := range attachments {
+		stored := *attachment
+		stored.MessageID = messageID
+		f.attachments[messageID] = append(f.attachments[messageID], &stored)
+	}
+
+	return nil
+}
+
+func (f fakeAttachmentStore) List(
+	_ context.Context,
+	_, messageID int64,
+) ([]*model.EmailMessageAttachment, error) {
+	f.record("list_attachments")
+
+	return f.attachments[messageID], nil
+}
+
+func (f fakeAttachmentStore) MarkStored(
+	_ context.Context,
+	_, messageID int64,
+	position int32,
+	fileID int64,
+) (bool, error) {
+	f.record("mark_stored")
+	for _, attachment := range f.attachments[messageID] {
+		if attachment.Position != position || attachment.State != model.EmailAttachmentStatePending {
+			continue
+		}
+		stored := fileID
+		attachment.FileID = &stored
+		attachment.State = model.EmailAttachmentStateStored
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+type fakeFailureStore struct{ *fakeStore }
+
+var _ store.InboundFailureStore = fakeFailureStore{}
+
+func (f fakeFailureStore) Record(_ context.Context, failure *model.InboundFailure) error {
+	f.record("record_failure")
+	f.failures = append(f.failures, failure)
 
 	return nil
 }

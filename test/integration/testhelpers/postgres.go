@@ -19,6 +19,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/webitel/webitel-emails/cmd/migrate"
+	"github.com/webitel/webitel-emails/internal/model"
 )
 
 // DSNEnv points the tests at an existing database instead of starting a
@@ -159,6 +160,23 @@ func Reset(t *testing.T, db *sql.DB) {
 	}
 }
 
+// SeedAssignment gives a profile an owner and a fencing generation, which every
+// write of an inbound email is checked against.
+func SeedAssignment(t *testing.T, db *sql.DB, domainID, profileID int64, owner string, generation int64) {
+	t.Helper()
+
+	const query = `
+INSERT INTO email.profile_runtime (profile_id, domain_id, owner_instance_id, assignment_generation)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (profile_id) DO UPDATE SET
+    owner_instance_id = EXCLUDED.owner_instance_id,
+    assignment_generation = EXCLUDED.assignment_generation`
+
+	if _, err := db.ExecContext(context.Background(), query, profileID, domainID, owner, generation); err != nil {
+		t.Fatalf("seed assignment: %v", err)
+	}
+}
+
 // SeedProfile creates an enabled profile and returns its identifier.
 func SeedProfile(t *testing.T, db *sql.DB, domainID int64, name string) int64 {
 	t.Helper()
@@ -176,5 +194,20 @@ RETURNING id`
 		t.Fatalf("seed profile: %v", err)
 	}
 
+	// Inbound writes are fenced by the assignment, so a seeded profile is owned
+	// just as a polled one is.
+	assignment := Assignment(domainID, id)
+	SeedAssignment(t, db, domainID, id, assignment.OwnerInstanceID, assignment.Generation)
+
 	return id
+}
+
+// Assignment is the ownership token SeedProfile gives every seeded profile.
+func Assignment(domainID, profileID int64) model.EmailProfileAssignment {
+	return model.EmailProfileAssignment{
+		ProfileID:       profileID,
+		DomainID:        domainID,
+		OwnerInstanceID: "integration-instance",
+		Generation:      1,
+	}
 }

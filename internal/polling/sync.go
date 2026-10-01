@@ -24,6 +24,7 @@ func (s *Scheduler) sync(
 	ctx context.Context,
 	conn mailinfra.IMAPSession,
 	profile *model.EmailProfile,
+	assignment model.EmailProfileAssignment,
 	stored *model.ProviderCursor,
 	log *slog.Logger,
 ) syncResult {
@@ -65,9 +66,9 @@ func (s *Scheduler) sync(
 			return syncResult{cursor: imapCursor(cursor)}
 		}
 
-		return s.recover(ctx, conn, profile, cursor, log)
+		return s.recover(ctx, conn, profile, assignment, cursor, log)
 	case stored.IMAP.Recovery != nil:
-		return s.recover(ctx, conn, profile, *stored.IMAP, log)
+		return s.recover(ctx, conn, profile, assignment, *stored.IMAP, log)
 	default:
 		cursor = *stored.IMAP
 	}
@@ -87,7 +88,7 @@ func (s *Scheduler) sync(
 	}
 
 	handled := make(map[uint32]time.Time, len(uids))
-	imapErr, handlerErr := s.deliver(ctx, conn, profile, cursor, uids, handled)
+	imapErr, handlerErr := s.deliver(ctx, conn, profile, assignment, cursor, uids, handled)
 	advanceConfirmed(&cursor, uids, handled)
 
 	return syncResult{cursor: imapCursor(cursor), more: more, imapErr: imapErr, handlerErr: handlerErr}
@@ -100,6 +101,7 @@ func (s *Scheduler) deliver(
 	ctx context.Context,
 	conn mailinfra.IMAPSession,
 	profile *model.EmailProfile,
+	assignment model.EmailProfileAssignment,
 	cursor model.IMAPCursor,
 	uids []uint32,
 	handled map[uint32]time.Time,
@@ -121,6 +123,7 @@ func (s *Scheduler) deliver(
 			handlerErr = s.handler.Handle(ctx, &inbound.Message{
 				DomainID:     profile.DomainID,
 				ProfileID:    profile.ID,
+				Assignment:   assignment,
 				Mailbox:      cursor.Mailbox,
 				UIDValidity:  cursor.UIDValidity,
 				UID:          message.UID,

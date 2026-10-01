@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"fmt"
 
+	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
@@ -37,6 +38,44 @@ func (u *unitOfWork) EmailMessageStore() store.EmailMessageStore {
 // EmailRecipientStore returns the recipient store bound to the current querier.
 func (u *unitOfWork) EmailRecipientStore() store.EmailRecipientStore {
 	return NewEmailRecipientStore(u.querier)
+}
+
+// EmailMessageAttachmentStore returns the manifest store bound to the current querier.
+func (u *unitOfWork) EmailMessageAttachmentStore() store.EmailMessageAttachmentStore {
+	return NewEmailMessageAttachmentStore(u.querier)
+}
+
+// InboundFailureStore returns the quarantine store bound to the current querier.
+func (u *unitOfWork) InboundFailureStore() store.InboundFailureStore {
+	return NewInboundFailureStore(u.querier)
+}
+
+// EnsureEmailProfileAssignment checks the fencing token without locking the row.
+func (u *unitOfWork) EnsureEmailProfileAssignment(
+	ctx context.Context,
+	assignment model.EmailProfileAssignment,
+) error {
+	const query = `
+SELECT 1 FROM email.profile_runtime
+WHERE profile_id = $1 AND owner_instance_id = $2 AND assignment_generation = $3`
+
+	var fenced int
+	err := u.querier.QueryRowContext(
+		ctx,
+		query,
+		assignment.ProfileID,
+		assignment.OwnerInstanceID,
+		assignment.Generation,
+	).Scan(&fenced)
+
+	switch {
+	case stderrors.Is(err, sql.ErrNoRows):
+		return store.ErrStaleEmailProfileAssignment
+	case err != nil:
+		return fmt.Errorf("store: check email profile %d assignment: %w", assignment.ProfileID, err)
+	default:
+		return nil
+	}
 }
 
 // emailProfileLockNamespace is "EMLS" in ASCII and occupies the high half of the

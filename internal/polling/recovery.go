@@ -63,6 +63,7 @@ func (s *Scheduler) recover(
 	ctx context.Context,
 	conn mailinfra.IMAPSession,
 	profile *model.EmailProfile,
+	assignment model.EmailProfileAssignment,
 	cursor model.IMAPCursor,
 	log *slog.Logger,
 ) syncResult {
@@ -115,7 +116,7 @@ func (s *Scheduler) recover(
 		fresh = append(fresh, uid)
 	}
 
-	imapErr, handlerErr := s.deliver(ctx, conn, profile, cursor, fresh, handled)
+	imapErr, handlerErr := s.deliver(ctx, conn, profile, assignment, cursor, fresh, handled)
 	advanceConfirmed(&cursor, uids, handled)
 
 	if imapErr != nil || handlerErr != nil {

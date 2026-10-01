@@ -10,11 +10,59 @@ import (
 	"testing"
 	"time"
 
+	"github.com/webitel/webitel-emails/config"
+	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
 func testHandler(fake *fakeStore) *PersistenceHandler {
-	return NewPersistenceHandler(fake, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return testUploadingHandler(fake, &fakeUploader{})
+}
+
+func testUploadingHandler(fake *fakeStore, files *fakeUploader) *PersistenceHandler {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
+	completer := NewMessageCompleter(fake, files, cfg, log)
+
+	return NewPersistenceHandler(fake, completer, log)
+}
+
+// fakeUploader stores files in memory and can fail after a chosen number of
+// successful uploads, which is how an interrupted email is simulated.
+type fakeUploader struct {
+	requests   []storageinfra.UploadRequest
+	failAfter  int
+	failWith   error
+	nextFileID int64
+}
+
+func (f *fakeUploader) UploadFile(
+	_ context.Context,
+	req storageinfra.UploadRequest,
+) (storageinfra.UploadResult, error) {
+	if f.failWith != nil && len(f.requests) >= f.failAfter {
+		return storageinfra.UploadResult{}, f.failWith
+	}
+
+	f.requests = append(f.requests, req)
+	f.nextFileID++
+
+	return storageinfra.UploadResult{FileID: 1000 + f.nextFileID, Size: int64(len(req.Content))}, nil
+}
+
+// withParts gives the email two uploadable parts and one the parser skipped.
+func withParts(email *model.ParsedEmail) *model.ParsedEmail {
+	email.Parts = []model.EmailPart{
+		{Name: "a.pdf", ContentType: "application/pdf", Disposition: model.EmailPartDispositionAttachment,
+			Size: 3, Content: []byte("pdf")},
+		{Name: "b.png", ContentType: "image/png", ContentID: "cid-b",
+			Disposition: model.EmailPartDispositionInline, Size: 3, Content: []byte("png")},
+		{Name: "big.bin", ContentType: "application/octet-stream",
+			Disposition: model.EmailPartDispositionAttachment, Size: 99,
+			SkippedReason: model.EmailPartSkippedSizeLimit},
+	}
+
+	return email
 }
 
 func testEmail(messageID string, generated bool, raw string, uidValidity, uid uint32) *model.ParsedEmail {
@@ -124,27 +172,63 @@ func TestPersistenceDeduplicates(t *testing.T) {
 	}
 }
 
-func TestPersistenceUnfinishedMessageIsNotConfirmed(t *testing.T) {
+func TestPersistenceResumesUnfinishedAttachments(t *testing.T) {
 	fake := newFakeStore()
-	handler := testHandler(fake)
+	// The first part is stored, the second fails, so the email stays unfinished.
+	files := &fakeUploader{failAfter: 1, failWith: errors.New("storage is down")}
+	handler := testUploadingHandler(fake, files)
 	ctx := context.Background()
 
-	if err := handler.Handle(ctx, testEmail("<m1@x>", false, "raw-1", 10, 5)); err != nil {
-		t.Fatal(err)
+	if err := handler.Handle(ctx, withParts(testEmail("<m1@x>", false, "raw-1", 10, 5))); err == nil {
+		t.Fatal("an unfinished email was confirmed to the cursor")
 	}
-	fake.messages[0].State = model.EmailMessageStateProcessing
-
-	if err := handler.Handle(ctx, testEmail("<m1@x>", false, "raw-1", 10, 5)); err == nil {
-		t.Fatal("an unfinished message was confirmed to the cursor")
+	if fake.messages[0].State != model.EmailMessageStateProcessing {
+		t.Fatalf("state = %s, want processing", fake.messages[0].State)
+	}
+	if fake.messages[0].AttachmentAttempts != 1 {
+		t.Fatalf("attempts = %d, want 1", fake.messages[0].AttachmentAttempts)
+	}
+	if fake.threads[0].LastMessageAt != nil {
+		t.Fatal("an unfinished email advanced its thread")
 	}
 
-	// A failed message is terminal, so the retry is a successful no-op.
-	fake.messages[0].State = model.EmailMessageStateFailed
-	if err := handler.Handle(ctx, testEmail("<m1@x>", false, "raw-1", 10, 5)); err != nil {
-		t.Fatalf("failed message must be a no-op: %v", err)
+	files.failWith = nil
+	if err := handler.Handle(ctx, withParts(testEmail("<m1@x>", false, "raw-1", 10, 5))); err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	// Two uploads in total: the part stored before the failure is not sent again,
+	// and the skipped part is never sent.
+	if len(files.requests) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(files.requests))
+	}
+	if files.requests[1].ReferenceID == files.requests[0].ReferenceID {
+		t.Fatalf("the same part was uploaded twice: %s", files.requests[1].ReferenceID)
+	}
+	if fake.messages[0].State != model.EmailMessageStateReady {
+		t.Fatalf("state = %s, want ready", fake.messages[0].State)
+	}
+	if fake.threads[0].LastMessageAt == nil {
+		t.Fatal("a completed email did not advance its thread")
 	}
 	if len(fake.messages) != 1 {
-		t.Fatalf("messages=%d, want 1", len(fake.messages))
+		t.Fatalf("messages = %d, want 1", len(fake.messages))
+	}
+}
+
+func TestPersistenceCanceledUploadDoesNotSpendAnAttempt(t *testing.T) {
+	fake := newFakeStore()
+	files := &fakeUploader{failWith: context.Canceled}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := testUploadingHandler(fake, files).Handle(
+		ctx, withParts(testEmail("<m1@x>", false, "raw-1", 10, 5)),
+	); err == nil {
+		t.Fatal("a canceled delivery was confirmed to the cursor")
+	}
+	if fake.messages[0].AttachmentAttempts != 0 {
+		t.Fatalf("attempts = %d, want 0", fake.messages[0].AttachmentAttempts)
 	}
 }
 

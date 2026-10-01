@@ -60,9 +60,14 @@ passes by silently skipping PostgreSQL checks.
 ## Inbound email
 
 The service reads mailboxes over IMAP, parses each message and stores it as a
-Thread with its Messages. Attachments are not stored yet, so an email that
-carries any file is deliberately refused and stays in the mailbox until the
-attachment task is finished. Do not deploy this state to production on its own.
+Thread with its Messages. Attachments and inline images are uploaded to the
+`storage` service and linked to their Message, so an email is stored whole.
+
+The persistence pipeline is therefore complete, but processing an incoming email
+is not: a Message becomes `ready` without the event that starts a Flow, because
+the Transactional Outbox and the Flow call arrive with a later task. Do not
+enable polling in production until then, or emails will be stored and never
+routed to an operator.
 
 Configuration can also be supplied through environment variables. For local
 development, copy `.env.example` to `.env`, adjust its values, and export them

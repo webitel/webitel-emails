@@ -26,6 +26,17 @@ type EmailAddress struct {
 	NormalizedAddress string
 }
 
+// EmailPartSkippedReason names why a part is stored as metadata only.
+type EmailPartSkippedReason string
+
+// Reasons a part is not stored, all decided by the MIME limits.
+const (
+	EmailPartSkippedCountLimit EmailPartSkippedReason = "attachment_count_limit_exceeded"
+	EmailPartSkippedSizeLimit  EmailPartSkippedReason = "attachment_size_limit_exceeded"
+	EmailPartSkippedTotalLimit EmailPartSkippedReason = "attachments_total_size_limit_exceeded"
+	EmailPartSkippedReadError  EmailPartSkippedReason = "attachment_read_error"
+)
+
 // EmailPart is one parsed attachment or inline MIME part.
 type EmailPart struct {
 	Name          string
@@ -34,7 +45,7 @@ type EmailPart struct {
 	Disposition   EmailPartDisposition
 	Size          int64
 	Content       []byte
-	SkippedReason string
+	SkippedReason EmailPartSkippedReason
 }
 
 // EmailBounceInfo contains the available delivery failure details.
@@ -49,6 +60,8 @@ type EmailBounceInfo struct {
 type ParsedEmail struct {
 	DomainID  int64
 	ProfileID int64
+	// Assignment fences every write of this email against a newer profile owner.
+	Assignment EmailProfileAssignment
 
 	Mailbox     string
 	UIDValidity uint32

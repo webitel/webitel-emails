@@ -21,7 +21,7 @@ func TestSyncAdvancesCursorAfterMIMEHandling(t *testing.T) {
 	scheduler := newTestScheduler(inbound.NewMIMEHandler(newTestMIMEParser(), next))
 	session := &testIMAPSession{raw: []byte("From: sender@example.org\r\nTo: receiver@example.org\r\nSubject: Hello\r\n\r\nBody")}
 
-	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), testCursor(), testLogger())
 
 	if result.imapErr != nil || result.handlerErr != nil {
 		t.Fatalf("sync errors: imap=%v, handler=%v", result.imapErr, result.handlerErr)
@@ -53,7 +53,7 @@ func TestSyncRetriesAfterMIMEHandlerError(t *testing.T) {
 	}
 	stored := testCursor()
 
-	failed := scheduler.sync(context.Background(), session, testProfile(), stored, testLogger())
+	failed := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), stored, testLogger())
 	if failed.imapErr != nil || failed.handlerErr == nil {
 		t.Fatalf("sync errors: imap=%v, handler=%v", failed.imapErr, failed.handlerErr)
 	}
@@ -62,7 +62,7 @@ func TestSyncRetriesAfterMIMEHandlerError(t *testing.T) {
 	}
 
 	session.rawByUID[3] = valid
-	retried := scheduler.sync(context.Background(), session, testProfile(), failed.cursor, testLogger())
+	retried := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), failed.cursor, testLogger())
 	if retried.imapErr != nil || retried.handlerErr != nil {
 		t.Fatalf("retry errors: imap=%v, handler=%v", retried.imapErr, retried.handlerErr)
 	}
@@ -94,7 +94,7 @@ func TestSyncAdvancesPastDurablyQuarantinedEmail(t *testing.T) {
 		},
 	}
 
-	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), testCursor(), testLogger())
 	if result.imapErr != nil || result.handlerErr != nil {
 		t.Fatalf("sync errors: imap=%v handler=%v", result.imapErr, result.handlerErr)
 	}
@@ -122,7 +122,7 @@ func TestSyncDoesNotAdvanceWhenQuarantineWriteFails(t *testing.T) {
 	scheduler := newTestScheduler(inbound.NewQuarantineHandler(mime, failures, testLogger()))
 	session := &testIMAPSession{availableUIDs: []uint32{2}, rawByUID: map[uint32][]byte{2: malformed}}
 
-	result := scheduler.sync(context.Background(), session, testProfile(), testCursor(), testLogger())
+	result := scheduler.sync(context.Background(), session, testProfile(), testAssignment(), testCursor(), testLogger())
 	if !errors.Is(result.handlerErr, writeErr) {
 		t.Fatalf("handler error = %v, want quarantine write error", result.handlerErr)
 	}
@@ -298,6 +298,20 @@ func (s *testMessageStore) Create(context.Context, *model.EmailMessage) (*model.
 	return nil, nil
 }
 
+func (s *testMessageStore) MarkReady(
+	context.Context, int64, int64,
+) (model.EmailMessageState, error) {
+	return model.EmailMessageStateReady, nil
+}
+
+func (s *testMessageStore) MarkFailed(context.Context, int64, int64) (bool, error) {
+	return true, nil
+}
+
+func (s *testMessageStore) IncrementAttachmentAttempts(context.Context, int64, int64) (int32, error) {
+	return 1, nil
+}
+
 func newTestMIMEParser() *inbound.MIMEParser {
 	return inbound.NewMIMEParser(&config.Config{MIME: config.MIMEConfig{
 		MaxBodySize:             1 << 20,
@@ -309,6 +323,10 @@ func newTestMIMEParser() *inbound.MIMEParser {
 
 func testProfile() *model.EmailProfile {
 	return &model.EmailProfile{ID: 11, DomainID: 7, Mailbox: "INBOX"}
+}
+
+func testAssignment() model.EmailProfileAssignment {
+	return model.EmailProfileAssignment{ProfileID: 11, DomainID: 7, OwnerInstanceID: "instance-1", Generation: 1}
 }
 
 func testCursor() *model.ProviderCursor {

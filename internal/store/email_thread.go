@@ -63,6 +63,17 @@ type EmailMessageStore interface {
 	LocateByRawChecksum(ctx context.Context, domainID, profileID int64, checksum []byte) (*EmailMessageIdentity, error)
 	// Create stores a message of an existing Thread.
 	Create(ctx context.Context, message *model.EmailMessage) (*model.EmailMessage, error)
+	// MarkReady completes a message once its manifest holds no pending part and
+	// returns the state the message ends up in. "ready" means it is complete,
+	// whether this call or a concurrent delivery finished it; "processing" means a
+	// part is still pending.
+	MarkReady(ctx context.Context, domainID, messageID int64) (model.EmailMessageState, error)
+	// MarkFailed gives up on a processing message. False means it was already
+	// finished, so the caller must not record a reason for it.
+	MarkFailed(ctx context.Context, domainID, messageID int64) (bool, error)
+	// IncrementAttachmentAttempts counts one failed attempt to finish the
+	// attachments of a message and returns the new total.
+	IncrementAttachmentAttempts(ctx context.Context, domainID, messageID int64) (int32, error)
 	// LastReceivedAt returns when the newest ready message of a profile arrived,
 	// or the zero time when the profile has none. It is the fallback checkpoint
 	// for a cursor that predates recovery support.

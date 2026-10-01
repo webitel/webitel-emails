@@ -2,6 +2,8 @@ package inbound
 
 import (
 	"go.uber.org/fx"
+
+	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 )
 
 // Module assembles the inbound pipeline: raw email, MIME parsing, persistence.
@@ -10,10 +12,10 @@ var Module = fx.Module(
 	"inbound",
 	fx.Provide(
 		fx.Annotate(NewMIMEParser, fx.As(new(Parser))),
-		NewPersistenceHandler,
-		// Remove the gate with task 6 and annotate NewPersistenceHandler as the
-		// ParsedMessageHandler instead.
-		fx.Annotate(NewAttachmentGate, fx.As(new(ParsedMessageHandler))),
+		// Bound here so infra stays unaware of this package.
+		func(client *storageinfra.Client) FileUploader { return client },
+		NewMessageCompleter,
+		fx.Annotate(NewPersistenceHandler, fx.As(new(ParsedMessageHandler))),
 		NewMIMEHandler,
 		fx.Annotate(NewQuarantineHandler, fx.As(new(Handler))),
 	),

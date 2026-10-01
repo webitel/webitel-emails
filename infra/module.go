@@ -14,6 +14,7 @@ import (
 	"github.com/webitel/webitel-emails/infra/postgres"
 	"github.com/webitel/webitel-emails/infra/pubsub"
 	grpcserver "github.com/webitel/webitel-emails/infra/server/grpc"
+	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/infra/tls"
 )
 
@@ -30,4 +31,5 @@ var Module = fx.Module(
 	grpcserver.Module,
 	servicediscovery.Module,
 	leader.Module,
+	storageinfra.Module,
 )
