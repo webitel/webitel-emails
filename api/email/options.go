@@ -137,4 +137,32 @@ var WebitelAPI = WebitelServicesInfo{
 			},
 		},
 	},
+	"EmailThreads": WebitelServices{
+		ObjClass:           "email_thread",
+		AdditionalLicenses: []string{},
+		WebitelMethods: map[string]WebitelMethod{
+			"BindEmailThreadContact": WebitelMethod{
+				Access: 2,
+				Input:  "BindEmailThreadContactRequest",
+				Output: "BindEmailThreadContactResponse",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/contact",
+						Method: "PUT",
+					},
+				},
+			},
+			"UnbindEmailThreadContact": WebitelMethod{
+				Access: 2,
+				Input:  "UnbindEmailThreadContactRequest",
+				Output: "UnbindEmailThreadContactResponse",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/contact",
+						Method: "DELETE",
+					},
+				},
+			},
+		},
+	},
 }

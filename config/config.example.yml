@@ -56,3 +56,7 @@ storage:
   upload_timeout: 2m
   max_concurrent_uploads: 20
   max_attachment_attempts: 3
+
+contacts:
+  search_timeout: 5s
+  max_concurrent_searches: 20

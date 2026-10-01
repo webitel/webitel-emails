@@ -16,6 +16,7 @@ const emailThreadColumns = `t.id,
     t.domain_id,
     t.profile_id,
     t.contact_id,
+    t.contact_resolution_state,
     t.kind,
     t.subject,
     t.status,
@@ -45,9 +46,19 @@ func NewEmailThreadStore(q Querier) *emailThreadStore {
 func (s *emailThreadStore) Create(ctx context.Context, thread *model.EmailThread) (*model.EmailThread, error) {
 	const query = `
 INSERT INTO email.thread AS t (
-    domain_id, profile_id, contact_id, kind, subject, status, last_message_at, completed_at
+    domain_id, profile_id, contact_id, contact_resolution_state,
+    kind, subject, status, last_message_at, completed_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+-- An unset resolution state falls back to the one the kind requires, so a caller
+-- that does not resolve contacts cannot create a Thread the schema refuses.
+VALUES (
+    $1, $2, $3,
+    COALESCE(
+        NULLIF($4, ''),
+        CASE WHEN $5 = 'service' THEN 'not_applicable' ELSE 'pending' END
+    ),
+    $5, $6, $7, $8, $9
+)
 RETURNING ` + emailThreadColumns
 
 	created, err := scanEmailThread(s.db.QueryRowContext(
@@ -56,6 +67,7 @@ RETURNING ` + emailThreadColumns
 		thread.DomainID,
 		thread.ProfileID,
 		thread.ContactID,
+		string(thread.ContactResolutionState),
 		thread.Kind,
 		thread.Subject,
 		thread.Status,
@@ -109,6 +121,116 @@ LIMIT 1`
 	))
 }
 
+// ResolveContact writes the resolution outcome under the states that still allow
+// it, so a late automatic answer cannot replace what an operator chose.
+func (s *emailThreadStore) ResolveContact(
+	ctx context.Context,
+	domainID, threadID int64,
+	state model.EmailContactResolutionState,
+	contactID *int64,
+) (bool, error) {
+	const query = `
+UPDATE email.thread SET
+    contact_id = $4,
+    contact_resolution_state = $5,
+    updated_at = now()
+WHERE domain_id = $1 AND id = $2 AND kind = $3
+    AND contact_resolution_state IN ('pending', 'unavailable')`
+
+	result, err := s.db.ExecContext(
+		ctx,
+		query,
+		domainID,
+		threadID,
+		string(model.EmailThreadKindRegular),
+		nullableInt64(contactID),
+		string(state),
+	)
+	if err != nil {
+		return false, ParseError(err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return affected > 0, nil
+}
+
+// SetContactManually is not limited to the states automatic resolution may write:
+// an operator may correct a resolved Thread as well. The regular kind is still
+// required, so an auto-reply or a bounce never receives a contact.
+func (s *emailThreadStore) SetContactManually(
+	ctx context.Context,
+	domainID, threadID int64,
+	contactID *int64,
+) (bool, error) {
+	const query = `
+UPDATE email.thread SET
+    contact_id = $4,
+    contact_resolution_state = CASE WHEN $4::bigint IS NULL THEN 'unlinked' ELSE 'resolved' END,
+    updated_at = now()
+WHERE domain_id = $1 AND id = $2 AND kind = $3`
+
+	result, err := s.db.ExecContext(
+		ctx,
+		query,
+		domainID,
+		threadID,
+		string(model.EmailThreadKindRegular),
+		nullableInt64(contactID),
+	)
+	if err != nil {
+		return false, ParseError(err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return affected > 0, nil
+}
+
+// FirstSenderAddress takes the sender of the earliest message of the Thread by
+// identity order rather than by received_at: the stored order is what decides
+// which email opened the conversation, whatever dates the headers carry. That
+// message is chosen first and only then asked for its sender, so a later email
+// can never stand in for it; the message may still be processing, which is the
+// case right after a crash.
+func (s *emailThreadStore) FirstSenderAddress(
+	ctx context.Context,
+	domainID, threadID int64,
+) (string, error) {
+	const query = `
+WITH first_message AS (
+    SELECT m.domain_id, m.id
+    FROM email.message m
+    WHERE m.domain_id = $1 AND m.thread_id = $2
+    ORDER BY m.id
+    LIMIT 1
+)
+SELECT r.normalized_address
+FROM first_message f
+LEFT JOIN email.recipient r
+    ON r.domain_id = f.domain_id AND r.message_id = f.id
+    AND r.type = 'from' AND r.ordinal = 0`
+
+	var address sql.NullString
+	if err := s.db.QueryRowContext(ctx, query, domainID, threadID).Scan(&address); err != nil {
+		// No rows at all means the Thread holds no message yet; an absent sender
+		// comes back as NULL. Both leave the Thread without an address to search.
+		if stderrors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+
+		return "", ParseError(err)
+	}
+
+	return address.String, nil
+}
+
 func (s *emailThreadStore) AdvanceLastMessage(
 	ctx context.Context,
 	domainID, profileID, threadID int64,
@@ -143,18 +265,20 @@ func locateEmailThread(row rowScanner) (*model.EmailThread, error) {
 
 func scanEmailThread(row rowScanner) (*model.EmailThread, error) {
 	var (
-		thread        model.EmailThread
-		contactID     sql.NullInt64
-		kind          string
-		status        string
-		lastMessageAt sql.NullTime
-		completedAt   sql.NullTime
+		thread          model.EmailThread
+		contactID       sql.NullInt64
+		resolutionState string
+		kind            string
+		status          string
+		lastMessageAt   sql.NullTime
+		completedAt     sql.NullTime
 	)
 	if err := row.Scan(
 		&thread.ID,
 		&thread.DomainID,
 		&thread.ProfileID,
 		&contactID,
+		&resolutionState,
 		&kind,
 		&thread.Subject,
 		&status,
@@ -166,6 +290,7 @@ func scanEmailThread(row rowScanner) (*model.EmailThread, error) {
 		return nil, err
 	}
 
+	thread.ContactResolutionState = model.EmailContactResolutionState(resolutionState)
 	thread.Kind = model.EmailThreadKind(kind)
 	thread.Status = model.EmailThreadStatus(status)
 	thread.LastMessageAt = nullTimeValue(lastMessageAt)

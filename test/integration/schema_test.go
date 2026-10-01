@@ -56,9 +56,21 @@ INSERT INTO email.thread (domain_id, profile_id, kind, status) VALUES (1, $1, 's
 			t.Fatal("an open service thread was accepted")
 		}
 		if _, err := db.ExecContext(context.Background(), `
-INSERT INTO email.thread (domain_id, profile_id, kind, status, completed_at)
-VALUES (1, $1, 'service', 'processed', $2)`, owner, completed); err != nil {
+INSERT INTO email.thread (domain_id, profile_id, kind, status, completed_at, contact_resolution_state)
+VALUES (1, $1, 'service', 'processed', $2, 'not_applicable')`, owner, completed); err != nil {
 			t.Fatalf("a closed service thread must be accepted: %v", err)
+		}
+
+		// The resolution state and the kind must agree in both directions.
+		if _, err := db.ExecContext(context.Background(), `
+INSERT INTO email.thread (domain_id, profile_id, kind, status, completed_at)
+VALUES (1, $1, 'service', 'processed', $2)`, owner, completed); err == nil {
+			t.Fatal("a service thread awaiting contact resolution was accepted")
+		}
+		if _, err := db.ExecContext(context.Background(), `
+INSERT INTO email.thread (domain_id, profile_id, kind, status, contact_resolution_state)
+VALUES (1, $1, 'regular', 'new', 'not_applicable')`, owner); err == nil {
+			t.Fatal("a regular thread excluded from contact resolution was accepted")
 		}
 	})
 

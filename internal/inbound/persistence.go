@@ -61,8 +61,10 @@ func (h *PersistenceHandler) Handle(ctx context.Context, parsed *model.ParsedEma
 		if stored != nil {
 			if stored.State == model.EmailMessageStateProcessing {
 				unfinished = &storedMessage{
-					ID:       stored.ID,
-					ThreadID: stored.ThreadID,
+					ID:                stored.ID,
+					ThreadID:          stored.ThreadID,
+					ThreadKind:        stored.ThreadKind,
+					ContactResolution: stored.ContactResolution,
 				}
 				h.log.Info("continuing an unfinished inbound email",
 					"domain_id", parsed.DomainID,
@@ -103,12 +105,15 @@ func (h *PersistenceHandler) persist(
 
 	attachments := buildAttachments(parsed)
 	unfinished := storedMessage{
-		ThreadID: thread.ID,
+		ThreadID:          thread.ID,
+		ThreadKind:        thread.Kind,
+		ContactResolution: thread.ContactResolutionState,
 	}
 
-	// The email stays invisible while it still has a file to upload.
+	// The email stays invisible while anything it owns is unfinished: a file still
+	// to upload, or a conversation still to match to a contact.
 	state := model.EmailMessageStateReady
-	if hasPendingAttachments(attachments) {
+	if hasPendingAttachments(attachments) || unfinished.needsContactResolution() {
 		state = model.EmailMessageStateProcessing
 	}
 
@@ -232,12 +237,16 @@ func createThread(
 		Kind:      model.EmailThreadKindRegular,
 		Subject:   parsed.Subject,
 		Status:    model.EmailThreadStatusNew,
+		// The contact is resolved after the Message is stored, by task 7.
+		ContactResolutionState: model.EmailContactResolutionPending,
 	}
 	if parsed.Kind != model.EmailKindRegular {
 		completedAt := parsed.ReceivedAt
 		thread.Kind = model.EmailThreadKindService
 		thread.Status = model.EmailThreadStatusProcessed
 		thread.CompletedAt = &completedAt
+		// A service Thread never resolves a contact.
+		thread.ContactResolutionState = model.EmailContactResolutionNotApplicable
 	}
 
 	return threads.Create(ctx, thread)

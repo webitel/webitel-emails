@@ -27,11 +27,15 @@ type EmailThreadLookup struct {
 }
 
 // EmailMessageIdentity is the stored state of a message, enough to decide
-// whether a redelivery is a duplicate.
+// whether a redelivery is a duplicate and what work its Thread still owes.
 type EmailMessageIdentity struct {
 	ID       int64
 	ThreadID int64
 	State    model.EmailMessageState
+	// ThreadKind and ContactResolution come from the Thread, so a redelivery can
+	// continue the contact resolution it left unfinished.
+	ThreadKind        model.EmailThreadKind
+	ContactResolution model.EmailContactResolutionState
 }
 
 // EmailThreadStore persists Threads and resolves the Thread of an incoming email.
@@ -46,6 +50,23 @@ type EmailThreadStore interface {
 	// LocateByInReplyTo returns the Thread of the oldest message whose In-Reply-To
 	// is inReplyTo, which serves both the sibling and the reverse-sibling rule.
 	LocateByInReplyTo(ctx context.Context, lookup EmailThreadLookup, inReplyTo string) (*model.EmailThread, error)
+	// ResolveContact stores the outcome of contact resolution. It applies only
+	// while the Thread is pending or was left unavailable, so a manual decision
+	// of an operator is never overwritten; false means it was not applied.
+	ResolveContact(
+		ctx context.Context,
+		domainID, threadID int64,
+		state model.EmailContactResolutionState,
+		contactID *int64,
+	) (bool, error)
+	// SetContactManually stores a decision of an operator, which outranks every
+	// automatic outcome. A service Thread is never touched; false means the Thread
+	// does not exist in this domain or is a service one.
+	SetContactManually(ctx context.Context, domainID, threadID int64, contactID *int64) (bool, error)
+	// FirstSenderAddress returns the normalized From address of the earliest
+	// message of a Thread, which is the address its contact is resolved by.
+	// An empty result means the Thread has no usable sender address.
+	FirstSenderAddress(ctx context.Context, domainID, threadID int64) (string, error)
 	// AdvanceLastMessage moves last_message_at forward; an older time is ignored.
 	// Callers hold the Thread from the same transaction, so a missing row is a no-op.
 	AdvanceLastMessage(ctx context.Context, domainID, profileID, threadID int64, at time.Time) error

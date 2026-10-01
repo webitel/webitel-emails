@@ -26,6 +26,13 @@ type Config struct {
 	IMAPPolling         IMAPPollingConfig         `mapstructure:"imap_polling"`
 	MIME                MIMEConfig                `mapstructure:"mime"`
 	Storage             StorageConfig             `mapstructure:"storage"`
+	Contacts            ContactsConfig            `mapstructure:"contacts"`
+}
+
+// ContactsConfig tunes contact resolution against go.webitel.app.
+type ContactsConfig struct {
+	SearchTimeout         time.Duration `mapstructure:"search_timeout"`
+	MaxConcurrentSearches int           `mapstructure:"max_concurrent_searches"`
 }
 
 // StorageConfig tunes attachment uploads to the storage service.
@@ -172,6 +179,8 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Int("storage.max_concurrent_uploads", 20, "maximum attachment uploads to storage running at the same time")
 	flags.Int32("storage.max_attachment_attempts", 3, "attempts to upload the attachments of one email before it is quarantined")
 
+	flags.Duration("contacts.search_timeout", 5*time.Second, "maximum duration of one contact search in go.webitel.app")
+	flags.Int("contacts.max_concurrent_searches", 20, "maximum contact searches running at the same time")
 }
 
 func (c *Config) validate() error {
@@ -199,6 +208,10 @@ func (c *Config) validate() error {
 	if err := c.Storage.validate(); err != nil {
 		return err
 	}
+	if err := c.Contacts.validate(); err != nil {
+		return err
+	}
+
 	if err := c.validateMigrate(); err != nil {
 		return err
 	}
@@ -281,6 +294,17 @@ func (c StorageConfig) validate() error {
 	}
 	if c.MaxAttachmentAttempts < 1 {
 		return fmt.Errorf("config: storage.max_attachment_attempts must be at least 1")
+	}
+
+	return nil
+}
+
+func (c ContactsConfig) validate() error {
+	if c.SearchTimeout <= 0 {
+		return fmt.Errorf("config: contacts.search_timeout must be positive")
+	}
+	if c.MaxConcurrentSearches < 1 {
+		return fmt.Errorf("config: contacts.max_concurrent_searches must be at least 1")
 	}
 
 	return nil

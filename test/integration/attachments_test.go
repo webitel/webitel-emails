@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/webitel/webitel-emails/config"
+	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
 	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/model"
@@ -48,6 +49,18 @@ func (s *stubUploader) UploadFile(
 	return storageinfra.UploadResult{FileID: 5000 + s.nextFileID}, nil
 }
 
+// stubContacts keeps contact resolution out of the way of attachment checks: an
+// address nobody holds leaves the Thread without a contact and completes it.
+type stubContacts struct{}
+
+func (stubContacts) ResolveByEmail(
+	_ context.Context,
+	_ int64,
+	_ string,
+) (contactsinfra.Resolution, error) {
+	return contactsinfra.Resolution{Outcome: contactsinfra.OutcomeNotFound}, nil
+}
+
 func newAttachmentHandler(
 	db *sql.DB,
 	files inbound.FileUploader,
@@ -57,7 +70,7 @@ func newAttachmentHandler(
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: maxAttempts}}
 
-	completer := inbound.NewMessageCompleter(uow, files, cfg, log)
+	completer := inbound.NewMessageCompleter(uow, files, stubContacts{}, cfg, log)
 
 	return inbound.NewPersistenceHandler(uow, completer, log)
 }

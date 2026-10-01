@@ -24,7 +24,7 @@ func newHandler(db *sql.DB) *inbound.PersistenceHandler {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
 
-	completer := inbound.NewMessageCompleter(uow, nil, cfg, log)
+	completer := inbound.NewMessageCompleter(uow, nil, stubContacts{}, cfg, log)
 
 	return inbound.NewPersistenceHandler(uow, completer, log)
 }

@@ -19,18 +19,35 @@ type FileUploader interface {
 	UploadFile(ctx context.Context, req storageinfra.UploadRequest) (storageinfra.UploadResult, error)
 }
 
-// storedMessage is the stored email whose attachment processing is being finished.
+// storedMessage is the stored email whose processing is being finished, together
+// with what its Thread still owes.
 type storedMessage struct {
-	ID       int64
-	ThreadID int64
+	ID                int64
+	ThreadID          int64
+	ThreadKind        model.EmailThreadKind
+	ContactResolution model.EmailContactResolutionState
 }
 
-// MessageCompleter finishes a processing Message: it uploads attachment parts
-// that have no file yet and makes the Message visible only once none remain.
-// Every write is fenced by the assignment of the poll that read the email.
+// needsContactResolution reports whether the Thread of this message still has to
+// be matched to a contact. A service Thread never is, and a Thread an operator
+// has already decided on is left alone.
+func (m storedMessage) needsContactResolution() bool {
+	if m.ThreadKind != model.EmailThreadKindRegular {
+		return false
+	}
+
+	return m.ContactResolution == model.EmailContactResolutionPending ||
+		m.ContactResolution == model.EmailContactResolutionUnavailable
+}
+
+// MessageCompleter finishes a processing Message: it uploads the attachment parts
+// that have no file yet, resolves the contact of a new conversation, and makes
+// the Message visible only once nothing is left unfinished. Every write is fenced
+// by the assignment of the poll that read the email.
 type MessageCompleter struct {
 	uow         store.UnitOfWork
 	files       FileUploader
+	contacts    ContactResolver
 	maxAttempts int32
 	log         *slog.Logger
 }
@@ -40,12 +57,14 @@ type MessageCompleter struct {
 func NewMessageCompleter(
 	uow store.UnitOfWork,
 	files FileUploader,
+	contacts ContactResolver,
 	cfg *config.Config,
 	log *slog.Logger,
 ) *MessageCompleter {
 	return &MessageCompleter{
 		uow:         uow,
 		files:       files,
+		contacts:    contacts,
 		maxAttempts: cfg.Storage.MaxAttachmentAttempts,
 		log:         log.With("component", "inbound_completion"),
 	}
@@ -118,7 +137,12 @@ func (u *MessageCompleter) Complete(
 		)
 	}
 
-	return u.markReady(ctx, parsed, message, log)
+	resolution, err := u.resolveContact(ctx, parsed, message, log)
+	if err != nil {
+		return err
+	}
+
+	return u.markReady(ctx, parsed, message, resolution, log)
 }
 
 // markStored records the file id in its own short transaction, so a failure
@@ -151,16 +175,21 @@ func (u *MessageCompleter) markStored(
 	})
 }
 
-// markReady completes the Message and advances the Thread in one transaction,
-// so the email becomes visible with every attachment it owns.
+// markReady stores the contact resolution, completes the Message and advances the
+// Thread in one transaction, so the email becomes visible with everything it owns.
 func (u *MessageCompleter) markReady(
 	ctx context.Context,
 	parsed *model.ParsedEmail,
 	message storedMessage,
+	resolution *contactResolution,
 	log *slog.Logger,
 ) error {
 	return u.uow.WithinTransaction(ctx, func(ctx context.Context, uow store.UnitOfWork) error {
 		if err := uow.EnsureEmailProfileAssignment(ctx, parsed.Assignment); err != nil {
+			return err
+		}
+
+		if err := u.storeResolution(ctx, uow, parsed, message, resolution, log); err != nil {
 			return err
 		}
 

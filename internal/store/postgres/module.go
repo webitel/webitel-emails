@@ -27,6 +27,11 @@ var Module = fx.Module(
 			fx.As(new(store.EmailProfileRuntimeStore)),
 		),
 		fx.Annotate(
+			NewEmailThreadStore,
+			fx.From(new(*sql.DB)),
+			fx.As(new(store.EmailThreadStore)),
+		),
+		fx.Annotate(
 			NewEmailMessageStore,
 			fx.From(new(*sql.DB)),
 			fx.As(new(store.EmailMessageStore)),

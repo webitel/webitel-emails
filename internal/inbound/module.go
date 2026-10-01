@@ -3,6 +3,7 @@ package inbound
 import (
 	"go.uber.org/fx"
 
+	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
 	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 )
 
@@ -14,6 +15,7 @@ var Module = fx.Module(
 		fx.Annotate(NewMIMEParser, fx.As(new(Parser))),
 		// Bound here so infra stays unaware of this package.
 		func(client *storageinfra.Client) FileUploader { return client },
+		func(client *contactsinfra.Client) ContactResolver { return client },
 		NewMessageCompleter,
 		fx.Annotate(NewPersistenceHandler, fx.As(new(ParsedMessageHandler))),
 		NewMIMEHandler,

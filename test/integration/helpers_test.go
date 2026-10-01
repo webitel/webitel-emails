@@ -24,10 +24,18 @@ func pqArray(target *[]string) any { return pq.Array(target) }
 func seedThread(t *testing.T, db *sql.DB, domainID, profileID int64, kind, status string, completedAt *time.Time) int64 {
 	t.Helper()
 
+	// The resolution state follows the kind, as it does for a Thread the service
+	// itself creates; the schema refuses any other pairing.
+	resolution := "pending"
+	if kind == "service" {
+		resolution = "not_applicable"
+	}
+
 	var id int64
 	err := db.QueryRowContext(context.Background(), `
-INSERT INTO email.thread (domain_id, profile_id, kind, status, subject, completed_at)
-VALUES ($1, $2, $3, $4, 'Subject', $5) RETURNING id`, domainID, profileID, kind, status, completedAt).Scan(&id)
+INSERT INTO email.thread (domain_id, profile_id, kind, status, subject, completed_at, contact_resolution_state)
+VALUES ($1, $2, $3, $4, 'Subject', $5, $6) RETURNING id`,
+		domainID, profileID, kind, status, completedAt, resolution).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed thread: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/webitel/webitel-emails/config"
+	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
 	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/internal/model"
 )
@@ -20,11 +21,51 @@ func testHandler(fake *fakeStore) *PersistenceHandler {
 }
 
 func testUploadingHandler(fake *fakeStore, files *fakeUploader) *PersistenceHandler {
+	return testHandlerWithDependencies(fake, files, &fakeContacts{})
+}
+
+func testHandlerWithContacts(fake *fakeStore, contacts *fakeContacts) *PersistenceHandler {
+	return testHandlerWithDependencies(fake, &fakeUploader{}, contacts)
+}
+
+func testHandlerWithDependencies(
+	fake *fakeStore,
+	files *fakeUploader,
+	contacts *fakeContacts,
+) *PersistenceHandler {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
-	completer := NewMessageCompleter(fake, files, cfg, log)
+	completer := NewMessageCompleter(fake, files, contacts, cfg, log)
 
 	return NewPersistenceHandler(fake, completer, log)
+}
+
+// fakeContacts answers contact searches in memory; by default every address is
+// unknown, which keeps a test focused on attachments free of contact effects.
+type fakeContacts struct {
+	byAddress    map[string]contactsinfra.Resolution
+	err          error
+	addresses    []string
+	beforeReturn func()
+}
+
+func (f *fakeContacts) ResolveByEmail(
+	_ context.Context,
+	_ int64,
+	address string,
+) (contactsinfra.Resolution, error) {
+	f.addresses = append(f.addresses, address)
+	if f.beforeReturn != nil {
+		f.beforeReturn()
+	}
+	if f.err != nil {
+		return contactsinfra.Resolution{}, f.err
+	}
+	if resolution, ok := f.byAddress[address]; ok {
+		return resolution, nil
+	}
+
+	return contactsinfra.Resolution{Outcome: contactsinfra.OutcomeNotFound}, nil
 }
 
 // fakeUploader stores files in memory and can fail after a chosen number of

@@ -12,14 +12,16 @@ import (
 // fakeStore is an in-memory stand-in for the storage layer. It records the order
 // of operations so a test can assert that the profile lock comes first.
 type fakeStore struct {
-	threads     []*model.EmailThread
-	messages    []*model.EmailMessage
-	recipients  map[int64][]*model.EmailRecipient
-	attachments map[int64][]*model.EmailMessageAttachment
-	failures    []*model.InboundFailure
-	nextID      int64
-	calls       []string
-	messageErr  error
+	threads        []*model.EmailThread
+	messages       []*model.EmailMessage
+	recipients     map[int64][]*model.EmailRecipient
+	attachments    map[int64][]*model.EmailMessageAttachment
+	failures       []*model.InboundFailure
+	nextID         int64
+	calls          []string
+	messageErr     error
+	firstSenderErr error
+	transactions   int
 	// staleAssignment makes every fenced check report a lost profile.
 	staleAssignment bool
 }
@@ -44,6 +46,7 @@ func (f *fakeStore) id() int64 {
 // WithinTransaction restores the snapshot on error, so a test sees the same
 // all-or-nothing outcome the database would give.
 func (f *fakeStore) WithinTransaction(ctx context.Context, fn func(context.Context, store.UnitOfWork) error) error {
+	f.transactions++
 	threads := slices.Clone(f.threads)
 	messages := slices.Clone(f.messages)
 
@@ -116,7 +119,17 @@ func (f *fakeStore) findMessage(match func(*model.EmailMessage) bool) *store.Ema
 			continue
 		}
 
-		return &store.EmailMessageIdentity{ID: message.ID, ThreadID: message.ThreadID, State: message.State}
+		identity := &store.EmailMessageIdentity{
+			ID: message.ID, ThreadID: message.ThreadID, State: message.State,
+		}
+		for _, thread := range f.threads {
+			if thread.ID == message.ThreadID {
+				identity.ThreadKind = thread.Kind
+				identity.ContactResolution = thread.ContactResolutionState
+			}
+		}
+
+		return identity
 	}
 
 	return nil
@@ -210,6 +223,80 @@ func (f fakeThreadStore) AdvanceLastMessage(
 	}
 
 	return nil
+}
+
+func (f fakeThreadStore) ResolveContact(
+	_ context.Context,
+	domainID, threadID int64,
+	state model.EmailContactResolutionState,
+	contactID *int64,
+) (bool, error) {
+	f.record("resolve_contact")
+
+	for _, thread := range f.threads {
+		if thread.ID != threadID || thread.DomainID != domainID || thread.Kind != model.EmailThreadKindRegular {
+			continue
+		}
+		if thread.ContactResolutionState != model.EmailContactResolutionPending &&
+			thread.ContactResolutionState != model.EmailContactResolutionUnavailable {
+			return false, nil
+		}
+		thread.ContactResolutionState = state
+		thread.ContactID = contactID
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func (f fakeThreadStore) SetContactManually(
+	_ context.Context,
+	domainID, threadID int64,
+	contactID *int64,
+) (bool, error) {
+	f.record("set_contact_manually")
+
+	for _, thread := range f.threads {
+		if thread.ID != threadID || thread.DomainID != domainID || thread.Kind != model.EmailThreadKindRegular {
+			continue
+		}
+		thread.ContactID = contactID
+		thread.ContactResolutionState = model.EmailContactResolutionUnlinked
+		if contactID != nil {
+			thread.ContactResolutionState = model.EmailContactResolutionResolved
+		}
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func (f fakeThreadStore) FirstSenderAddress(_ context.Context, domainID, threadID int64) (string, error) {
+	f.record("first_sender_address")
+	if f.firstSenderErr != nil {
+		return "", f.firstSenderErr
+	}
+
+	var first *model.EmailMessage
+	for _, message := range f.messages {
+		if message.DomainID != domainID || message.ThreadID != threadID ||
+			(first != nil && message.ID >= first.ID) {
+			continue
+		}
+		first = message
+	}
+	if first == nil {
+		return "", nil
+	}
+	for _, recipient := range f.recipients[first.ID] {
+		if recipient.Type == model.EmailRecipientTypeFrom && recipient.Ordinal == 0 {
+			return recipient.NormalizedAddress, nil
+		}
+	}
+
+	return "", nil
 }
 
 type fakeMessageStore struct{ *fakeStore }

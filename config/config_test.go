@@ -41,6 +41,9 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 		cfg.Storage.MaxAttachmentAttempts != 3 {
 		t.Errorf("storage defaults = %+v", cfg.Storage)
 	}
+	if cfg.Contacts.SearchTimeout != 5*time.Second || cfg.Contacts.MaxConcurrentSearches != 20 {
+		t.Errorf("contacts defaults = %+v", cfg.Contacts)
+	}
 }
 
 func TestLoadServerConfigPrecedence(t *testing.T) {
@@ -187,6 +190,10 @@ func TestConfigValidate(t *testing.T) {
 			MaxAttachmentsTotalSize: 20 << 20,
 			MaxAttachments:          15,
 		},
+		Contacts: ContactsConfig{
+			SearchTimeout:         5 * time.Second,
+			MaxConcurrentSearches: 20,
+		},
 		Storage: StorageConfig{
 			UploadTimeout:         2 * time.Minute,
 			MaxConcurrentUploads:  20,
@@ -279,6 +286,8 @@ func clearConfigEnvironment(t *testing.T) {
 		"STORAGE_UPLOAD_TIMEOUT",
 		"STORAGE_MAX_CONCURRENT_UPLOADS",
 		"STORAGE_MAX_ATTACHMENT_ATTEMPTS",
+		"CONTACTS_SEARCH_TIMEOUT",
+		"CONTACTS_MAX_CONCURRENT_SEARCHES",
 	} {
 		t.Setenv(name, "")
 	}

@@ -40,7 +40,15 @@ const emailMessageColumns = `m.id,
     m.created_at,
     m.updated_at`
 
-const emailMessageIdentityColumns = `m.id, m.thread_id, m.state`
+// The Thread columns travel with the identity so a redelivery knows whether the
+// conversation still owes contact resolution.
+const emailMessageIdentityColumns = `m.id, m.thread_id, m.state, t.kind, t.contact_resolution_state`
+
+// identityFromMessage joins the Thread of a located message within one tenant.
+const identityFromMessage = `
+FROM email.message m
+JOIN email.thread t
+    ON t.domain_id = m.domain_id AND t.profile_id = m.profile_id AND t.id = m.thread_id`
 
 type emailMessageStore struct {
 	db Querier
@@ -62,8 +70,7 @@ func (s *emailMessageStore) LocateByMessageID(
 		return nil, nil
 	}
 
-	const query = `SELECT ` + emailMessageIdentityColumns + `
-FROM email.message m
+	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2 AND m.message_id = $3`
 
 	return locateEmailMessageIdentity(s.db.QueryRowContext(ctx, query, domainID, profileID, messageID))
@@ -78,8 +85,7 @@ func (s *emailMessageStore) LocateByIMAPIdentity(
 		return nil, nil
 	}
 
-	const query = `SELECT ` + emailMessageIdentityColumns + `
-FROM email.message m
+	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2
   AND m.mailbox = $3 AND m.uid_validity = $4 AND m.uid = $5`
 
@@ -98,8 +104,7 @@ func (s *emailMessageStore) LocateByRawChecksum(
 	}
 
 	// Only emails whose identifier had to be generated are deduplicated this way.
-	const query = `SELECT ` + emailMessageIdentityColumns + `
-FROM email.message m
+	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2
   AND m.raw_sha256 = $3 AND m.message_id_generated`
 
@@ -288,10 +293,12 @@ func nullableText(value string) any {
 
 func locateEmailMessageIdentity(row rowScanner) (*store.EmailMessageIdentity, error) {
 	var (
-		identity store.EmailMessageIdentity
-		state    string
+		identity   store.EmailMessageIdentity
+		state      string
+		threadKind string
+		resolution string
 	)
-	if err := row.Scan(&identity.ID, &identity.ThreadID, &state); err != nil {
+	if err := row.Scan(&identity.ID, &identity.ThreadID, &state, &threadKind, &resolution); err != nil {
 		if stderrors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -299,6 +306,8 @@ func locateEmailMessageIdentity(row rowScanner) (*store.EmailMessageIdentity, er
 		return nil, ParseError(err)
 	}
 	identity.State = model.EmailMessageState(state)
+	identity.ThreadKind = model.EmailThreadKind(threadKind)
+	identity.ContactResolution = model.EmailContactResolutionState(resolution)
 
 	return &identity, nil
 }
