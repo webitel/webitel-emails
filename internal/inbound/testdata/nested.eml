@@ -1,0 +1,22 @@
+From: Alice Example <Alice.Smith@Example.COM>
+To: Bob <bob@example.org>, Carol <carol@example.org>
+Cc: Team <team@example.org>
+Subject: =?UTF-8?B?0KLQtdGB0YLQvtCy0LjQuSDQu9C40YHRgg==?=
+Message-ID: <nested@example.org>
+Date: Tue, 23 Sep 2025 10:15:00 +0300
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/alternative; boundary="alternative"
+
+--alternative
+Content-Type: text/plain; charset=UTF-8
+
+Hello from plain text.
+--alternative
+Content-Type: text/html; charset=UTF-8
+
+<p>Hello from <strong>HTML</strong>.</p>
+--alternative--
+--outer--
