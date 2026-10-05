@@ -294,6 +294,10 @@ func (s *testMessageStore) LocateByRawChecksum(
 	return nil, nil
 }
 
+func (s *testMessageStore) Get(context.Context, int64, int64) (*model.EmailMessage, error) {
+	return nil, nil
+}
+
 func (s *testMessageStore) Create(context.Context, *model.EmailMessage) (*model.EmailMessage, error) {
 	return nil, nil
 }

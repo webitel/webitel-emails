@@ -63,11 +63,12 @@ The service reads mailboxes over IMAP, parses each message and stores it as a
 Thread with its Messages. Attachments and inline images are uploaded to the
 `storage` service and linked to their Message, so an email is stored whole.
 
-The persistence pipeline is therefore complete, but processing an incoming email
-is not: a Message becomes `ready` without the event that starts a Flow, because
-the Transactional Outbox and the Flow call arrive with a later task. Do not
-enable polling in production until then, or emails will be stored and never
-routed to an operator.
+A Message that becomes `ready` writes an event to the Transactional Outbox, and
+`flow_manager` starts the Flow of its profile from it; see
+[docs/events.md](docs/events.md), including the rollout order. A Flow cannot yet
+hand the Thread to an operator queue, because `EmailJoinToQueue` arrives with a
+later task. Do not enable polling in production until then, or emails will reach
+their Flow and never an operator.
 
 Configuration can also be supplied through environment variables. For local
 development, copy `.env.example` to `.env`, adjust its values, and export them

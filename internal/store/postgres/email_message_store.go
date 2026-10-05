@@ -61,6 +61,19 @@ func NewEmailMessageStore(q Querier) *emailMessageStore {
 	return &emailMessageStore{db: q}
 }
 
+func (s *emailMessageStore) Get(ctx context.Context, domainID, messageID int64) (*model.EmailMessage, error) {
+	const query = `SELECT ` + emailMessageColumns + `
+FROM email.message m
+WHERE m.domain_id = $1 AND m.id = $2`
+
+	message, err := scanEmailMessage(s.db.QueryRowContext(ctx, query, domainID, messageID))
+	if err != nil {
+		return nil, ParseError(err)
+	}
+
+	return message, nil
+}
+
 func (s *emailMessageStore) LocateByMessageID(
 	ctx context.Context,
 	domainID, profileID int64,

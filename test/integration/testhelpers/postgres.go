@@ -26,7 +26,7 @@ import (
 // container, which is how they run where Docker is unavailable.
 const DSNEnv = "EMAILS_TEST_POSTGRES_DSN"
 
-const postgresImage = "postgres:18.1-alpine"
+const postgresImage = "postgres:16-alpine"
 
 var (
 	testDB        *sql.DB
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS directory.wbt_user (
 func Reset(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	const query = `DELETE FROM email.inbound_failure; DELETE FROM email.thread; DELETE FROM email.profile;`
+	const query = `DELETE FROM email.outbox; DELETE FROM email.inbound_failure; DELETE FROM email.thread; DELETE FROM email.profile;`
 	if _, err := db.ExecContext(context.Background(), query); err != nil {
 		t.Fatalf("reset database: %v", err)
 	}

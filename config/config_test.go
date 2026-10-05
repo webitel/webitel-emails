@@ -194,6 +194,18 @@ func TestConfigValidate(t *testing.T) {
 			SearchTimeout:         5 * time.Second,
 			MaxConcurrentSearches: 20,
 		},
+		InboundEvent: InboundEventConfig{
+			MaxBodyTextSize:     64 << 10,
+			MaxAddressesPerType: 100,
+			MaxAttachments:      100,
+			MaxFieldSize:        1024,
+			MaxPayloadSize:      1 << 20,
+		},
+		Outbox: OutboxConfig{
+			PublishTimeout: 5 * time.Second, PollInterval: time.Second, BatchSize: 100,
+			LeaseDuration: time.Minute, RetryInitialInterval: time.Second, RetryMaxInterval: 30 * time.Second,
+			Retention: 72 * time.Hour, CleanupInterval: time.Hour, CleanupBatch: 1000,
+		},
 		Storage: StorageConfig{
 			UploadTimeout:         2 * time.Minute,
 			MaxConcurrentUploads:  20,
@@ -288,6 +300,20 @@ func clearConfigEnvironment(t *testing.T) {
 		"STORAGE_MAX_ATTACHMENT_ATTEMPTS",
 		"CONTACTS_SEARCH_TIMEOUT",
 		"CONTACTS_MAX_CONCURRENT_SEARCHES",
+		"INBOUND_EVENT_MAX_BODY_TEXT_SIZE",
+		"INBOUND_EVENT_MAX_ADDRESSES_PER_TYPE",
+		"INBOUND_EVENT_MAX_ATTACHMENTS",
+		"INBOUND_EVENT_MAX_FIELD_SIZE",
+		"INBOUND_EVENT_MAX_PAYLOAD_SIZE",
+		"OUTBOX_PUBLISH_TIMEOUT",
+		"OUTBOX_POLL_INTERVAL",
+		"OUTBOX_BATCH_SIZE",
+		"OUTBOX_LEASE_DURATION",
+		"OUTBOX_RETRY_INITIAL_INTERVAL",
+		"OUTBOX_RETRY_MAX_INTERVAL",
+		"OUTBOX_RETENTION",
+		"OUTBOX_CLEANUP_INTERVAL",
+		"OUTBOX_CLEANUP_BATCH",
 	} {
 		t.Setenv(name, "")
 	}

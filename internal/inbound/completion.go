@@ -48,6 +48,7 @@ type MessageCompleter struct {
 	uow         store.UnitOfWork
 	files       FileUploader
 	contacts    ContactResolver
+	events      *EventWriter
 	maxAttempts int32
 	log         *slog.Logger
 }
@@ -58,6 +59,7 @@ func NewMessageCompleter(
 	uow store.UnitOfWork,
 	files FileUploader,
 	contacts ContactResolver,
+	events *EventWriter,
 	cfg *config.Config,
 	log *slog.Logger,
 ) *MessageCompleter {
@@ -65,6 +67,7 @@ func NewMessageCompleter(
 		uow:         uow,
 		files:       files,
 		contacts:    contacts,
+		events:      events,
 		maxAttempts: cfg.Storage.MaxAttachmentAttempts,
 		log:         log.With("component", "inbound_completion"),
 	}
@@ -175,8 +178,8 @@ func (u *MessageCompleter) markStored(
 	})
 }
 
-// markReady stores the contact resolution, completes the Message and advances the
-// Thread in one transaction, so the email becomes visible with everything it owns.
+// markReady stores the contact resolution, completes the Message, advances the Thread
+// and records the Flow event in one transaction, so nothing is visible without the rest.
 func (u *MessageCompleter) markReady(
 	ctx context.Context,
 	parsed *model.ParsedEmail,
@@ -214,6 +217,11 @@ func (u *MessageCompleter) markReady(
 		if err := uow.EmailThreadStore().AdvanceLastMessage(
 			ctx, parsed.DomainID, parsed.ProfileID, message.ThreadID, parsed.ReceivedAt,
 		); err != nil {
+			return err
+		}
+
+		// Also reached when a concurrent delivery finished it; the dedup key keeps one event.
+		if err := u.events.Write(ctx, uow, parsed.DomainID, message.ID); err != nil {
 			return err
 		}
 

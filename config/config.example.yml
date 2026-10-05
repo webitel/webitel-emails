@@ -60,3 +60,22 @@ storage:
 contacts:
   search_timeout: 5s
   max_concurrent_searches: 20
+
+inbound_event:
+  max_body_text_size: 65536
+  max_addresses_per_type: 100
+  max_attachments: 100
+  max_field_size: 1024
+  # Startup fails if the limits above allow a larger event.
+  max_payload_size: 1048576
+
+outbox:
+  publish_timeout: 5s
+  poll_interval: 1s
+  batch_size: 100
+  lease_duration: 1m
+  retry_initial_interval: 1s
+  retry_max_interval: 30s
+  retention: 72h
+  cleanup_interval: 1h
+  cleanup_batch: 1000

@@ -15,6 +15,7 @@ import (
 type PersistenceHandler struct {
 	uow       store.UnitOfWork
 	completer *MessageCompleter
+	events    *EventWriter
 	log       *slog.Logger
 }
 
@@ -24,11 +25,13 @@ var _ ParsedMessageHandler = (*PersistenceHandler)(nil)
 func NewPersistenceHandler(
 	uow store.UnitOfWork,
 	completer *MessageCompleter,
+	events *EventWriter,
 	log *slog.Logger,
 ) *PersistenceHandler {
 	return &PersistenceHandler{
 		uow:       uow,
 		completer: completer,
+		events:    events,
 		log:       log.With("component", "inbound_persistence"),
 	}
 }
@@ -142,9 +145,13 @@ func (h *PersistenceHandler) persist(
 		return &unfinished, nil
 	}
 
-	return nil, uow.EmailThreadStore().AdvanceLastMessage(
+	if err := uow.EmailThreadStore().AdvanceLastMessage(
 		ctx, parsed.DomainID, parsed.ProfileID, thread.ID, message.ReceivedAt,
-	)
+	); err != nil {
+		return nil, err
+	}
+
+	return nil, h.events.Write(ctx, uow, parsed.DomainID, message.ID)
 }
 
 // resolveThread applies the agreed lookup order and stops at the first match:

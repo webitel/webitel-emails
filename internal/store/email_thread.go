@@ -43,6 +43,8 @@ type EmailMessageIdentity struct {
 type EmailThreadStore interface {
 	// Create stores a new Thread.
 	Create(ctx context.Context, thread *model.EmailThread) (*model.EmailThread, error)
+	// Get returns a Thread of the domain; a missing one is a not-found error.
+	Get(ctx context.Context, domainID, threadID int64) (*model.EmailThread, error)
 	// LocateByMessageIDs returns the Thread of the message matching one of these
 	// Message-IDs. The list is ordered by increasing priority, so the match
 	// nearest its end wins.
@@ -84,6 +86,8 @@ type EmailMessageStore interface {
 	LocateByRawChecksum(ctx context.Context, domainID, profileID int64, checksum []byte) (*EmailMessageIdentity, error)
 	// Create stores a message of an existing Thread.
 	Create(ctx context.Context, message *model.EmailMessage) (*model.EmailMessage, error)
+	// Get returns a message of the domain; a missing one is a not-found error.
+	Get(ctx context.Context, domainID, messageID int64) (*model.EmailMessage, error)
 	// MarkReady completes a message once its manifest holds no pending part and
 	// returns the state the message ends up in. "ready" means it is complete,
 	// whether this call or a concurrent delivery finished it; "processing" means a
@@ -113,4 +117,13 @@ type EmailRecipientStore interface {
 	// CreateBulk stores the recipients of one message in a single statement,
 	// keeping their type and original order.
 	CreateBulk(ctx context.Context, domainID, messageID int64, recipients []*model.EmailRecipient) error
+	// List returns the recipients of a message ordered by type and position.
+	List(ctx context.Context, domainID, messageID int64) ([]*model.EmailRecipient, error)
+}
+
+// EmailProfileRoutingStore reads the routing settings of a profile inside the
+// caller's transaction, without touching its credentials.
+type EmailProfileRoutingStore interface {
+	// FlowID returns the Flow of a profile; nil means the profile has none.
+	FlowID(ctx context.Context, domainID, profileID int64) (*int64, error)
 }

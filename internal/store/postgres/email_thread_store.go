@@ -248,6 +248,19 @@ WHERE domain_id = $1 AND profile_id = $2 AND id = $3
 	return ParseError(err)
 }
 
+func (s *emailThreadStore) Get(ctx context.Context, domainID, threadID int64) (*model.EmailThread, error) {
+	const query = `SELECT ` + emailThreadColumns + `
+FROM email.thread t
+WHERE t.domain_id = $1 AND t.id = $2`
+
+	thread, err := scanEmailThread(s.db.QueryRowContext(ctx, query, domainID, threadID))
+	if err != nil {
+		return nil, ParseError(err)
+	}
+
+	return thread, nil
+}
+
 // locateEmailThread turns "no rows" into a nil Thread, because a threading rule
 // that does not match is an ordinary outcome, not a failure.
 func locateEmailThread(row rowScanner) (*model.EmailThread, error) {

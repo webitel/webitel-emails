@@ -37,6 +37,11 @@ var Module = fx.Module(
 			fx.As(new(store.EmailMessageStore)),
 		),
 		fx.Annotate(
+			NewOutboxRelayStore,
+			fx.From(new(*sql.DB)),
+			fx.As(new(store.OutboxRelayStore)),
+		),
+		fx.Annotate(
 			NewInboundFailureStore,
 			fx.From(new(*sql.DB)),
 			fx.As(new(store.InboundFailureStore)),

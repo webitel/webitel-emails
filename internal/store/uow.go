@@ -34,4 +34,8 @@ type UnitOfWork interface {
 	// InboundFailureStore accesses quarantine records, so a failing Message and
 	// its reason are written in one transaction.
 	InboundFailureStore() InboundFailureStore
+	// EmailProfileRoutingStore reads the Flow of a profile for its events.
+	EmailProfileRoutingStore() EmailProfileRoutingStore
+	// OutboxStore writes broker events; it works only inside WithinTransaction.
+	OutboxStore() OutboxStore
 }

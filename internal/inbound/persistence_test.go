@@ -34,10 +34,13 @@ func testHandlerWithDependencies(
 	contacts *fakeContacts,
 ) *PersistenceHandler {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
-	completer := NewMessageCompleter(fake, files, contacts, cfg, log)
+	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}, InboundEvent: config.InboundEventConfig{
+		MaxBodyTextSize: 64 << 10, MaxAddressesPerType: 100, MaxAttachments: 100, MaxFieldSize: 1024, MaxPayloadSize: 1 << 20,
+	}}
+	events := NewEventWriter(cfg, log)
+	completer := NewMessageCompleter(fake, files, contacts, events, cfg, log)
 
-	return NewPersistenceHandler(fake, completer, log)
+	return NewPersistenceHandler(fake, completer, events, log)
 }
 
 // fakeContacts answers contact searches in memory; by default every address is

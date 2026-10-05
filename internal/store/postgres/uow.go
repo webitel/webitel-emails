@@ -50,6 +50,16 @@ func (u *unitOfWork) InboundFailureStore() store.InboundFailureStore {
 	return NewInboundFailureStore(u.querier)
 }
 
+// EmailProfileRoutingStore returns the profile routing store bound to the current querier.
+func (u *unitOfWork) EmailProfileRoutingStore() store.EmailProfileRoutingStore {
+	return NewEmailProfileRoutingStore(u.querier)
+}
+
+// OutboxStore returns the Outbox store bound to the current querier.
+func (u *unitOfWork) OutboxStore() store.OutboxStore {
+	return NewOutboxStore(u.querier)
+}
+
 // EnsureEmailProfileAssignment checks the fencing token without locking the row.
 func (u *unitOfWork) EnsureEmailProfileAssignment(
 	ctx context.Context,

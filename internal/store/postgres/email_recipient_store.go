@@ -68,3 +68,49 @@ FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
 
 	return ParseError(err)
 }
+
+func (s *emailRecipientStore) List(
+	ctx context.Context,
+	domainID, messageID int64,
+) ([]*model.EmailRecipient, error) {
+	const query = `
+SELECT id, domain_id, message_id, type, address, normalized_address, display_name, ordinal
+FROM email.recipient
+WHERE domain_id = $1 AND message_id = $2
+ORDER BY type, ordinal`
+
+	rows, err := s.db.QueryContext(ctx, query, domainID, messageID)
+	if err != nil {
+		return nil, ParseError(err)
+	}
+	defer rows.Close()
+
+	var recipients []*model.EmailRecipient
+	for rows.Next() {
+		var (
+			recipient     model.EmailRecipient
+			recipientType string
+		)
+		if err := rows.Scan(
+			&recipient.ID,
+			&recipient.DomainID,
+			&recipient.MessageID,
+			&recipientType,
+			&recipient.Address,
+			&recipient.NormalizedAddress,
+			&recipient.DisplayName,
+			&recipient.Ordinal,
+		); err != nil {
+			return nil, ParseError(err)
+		}
+
+		recipient.Type = model.EmailRecipientType(recipientType)
+		recipients = append(recipients, &recipient)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, ParseError(err)
+	}
+
+	return recipients, nil
+}

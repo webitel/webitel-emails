@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/webitel/webitel-go-kit/appconfig"
+
+	"github.com/webitel/webitel-emails/internal/event"
 )
 
 // Config contains all settings used by the service and migration commands.
@@ -27,6 +29,45 @@ type Config struct {
 	MIME                MIMEConfig                `mapstructure:"mime"`
 	Storage             StorageConfig             `mapstructure:"storage"`
 	Contacts            ContactsConfig            `mapstructure:"contacts"`
+	InboundEvent        InboundEventConfig        `mapstructure:"inbound_event"`
+	Outbox              OutboxConfig              `mapstructure:"outbox"`
+}
+
+// OutboxConfig tunes publication of Outbox events to RabbitMQ.
+type OutboxConfig struct {
+	// PublishTimeout bounds the wait for the broker confirmation of one event.
+	PublishTimeout time.Duration `mapstructure:"publish_timeout"`
+	PollInterval   time.Duration `mapstructure:"poll_interval"`
+	BatchSize      int           `mapstructure:"batch_size"`
+	// LeaseDuration is how long a claimed row stays with the relay that took it.
+	LeaseDuration time.Duration `mapstructure:"lease_duration"`
+	// The pause after a broker failure grows from the initial to the max interval.
+	RetryInitialInterval time.Duration `mapstructure:"retry_initial_interval"`
+	RetryMaxInterval     time.Duration `mapstructure:"retry_max_interval"`
+	// Retention is how long a published row is kept before cleanup removes it.
+	Retention       time.Duration `mapstructure:"retention"`
+	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
+	CleanupBatch    int           `mapstructure:"cleanup_batch"`
+}
+
+// InboundEventConfig bounds the snapshot carried by the event that starts Flow.
+type InboundEventConfig struct {
+	MaxBodyTextSize     int `mapstructure:"max_body_text_size"`
+	MaxAddressesPerType int `mapstructure:"max_addresses_per_type"`
+	MaxAttachments      int `mapstructure:"max_attachments"`
+	MaxFieldSize        int `mapstructure:"max_field_size"`
+	MaxPayloadSize      int `mapstructure:"max_payload_size"`
+}
+
+// Limits returns the snapshot limits in the form the event builder takes.
+func (c InboundEventConfig) Limits() event.Limits {
+	return event.Limits{
+		MaxBodyTextSize:     c.MaxBodyTextSize,
+		MaxAddressesPerType: c.MaxAddressesPerType,
+		MaxAttachments:      c.MaxAttachments,
+		MaxFieldSize:        c.MaxFieldSize,
+		MaxPayloadSize:      c.MaxPayloadSize,
+	}
 }
 
 // ContactsConfig tunes contact resolution against go.webitel.app.
@@ -181,6 +222,22 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 
 	flags.Duration("contacts.search_timeout", 5*time.Second, "maximum duration of one contact search in go.webitel.app")
 	flags.Int("contacts.max_concurrent_searches", 20, "maximum contact searches running at the same time")
+
+	flags.Int("inbound_event.max_body_text_size", 64<<10, "maximum plain-text body bytes carried by the Flow event")
+	flags.Int("inbound_event.max_addresses_per_type", 100, "maximum addresses of each header carried by the Flow event")
+	flags.Int("inbound_event.max_attachments", 100, "maximum attachments listed in the Flow event")
+	flags.Int("inbound_event.max_field_size", 1024, "maximum bytes of the subject, identifiers and file names in the Flow event")
+	flags.Int("inbound_event.max_payload_size", 1<<20, "maximum serialized size of the Flow event in bytes")
+
+	flags.Duration("outbox.publish_timeout", 5*time.Second, "maximum wait for the RabbitMQ confirmation of one Outbox event")
+	flags.Duration("outbox.poll_interval", time.Second, "pause between Outbox reads that found nothing to publish")
+	flags.Int("outbox.batch_size", 100, "Outbox events claimed by one relay read")
+	flags.Duration("outbox.lease_duration", time.Minute, "how long a claimed Outbox event stays with the relay")
+	flags.Duration("outbox.retry_initial_interval", time.Second, "first pause after a RabbitMQ failure")
+	flags.Duration("outbox.retry_max_interval", 30*time.Second, "longest pause after repeated RabbitMQ failures")
+	flags.Duration("outbox.retention", 72*time.Hour, "how long a published Outbox event is kept")
+	flags.Duration("outbox.cleanup_interval", time.Hour, "how often published Outbox events are removed")
+	flags.Int("outbox.cleanup_batch", 1000, "published Outbox events removed by one statement")
 }
 
 func (c *Config) validate() error {
@@ -209,6 +266,12 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.Contacts.validate(); err != nil {
+		return err
+	}
+	if err := c.InboundEvent.Limits().Validate(); err != nil {
+		return fmt.Errorf("config: inbound_event: %w", err)
+	}
+	if err := c.Outbox.validate(); err != nil {
 		return err
 	}
 
@@ -294,6 +357,25 @@ func (c StorageConfig) validate() error {
 	}
 	if c.MaxAttachmentAttempts < 1 {
 		return fmt.Errorf("config: storage.max_attachment_attempts must be at least 1")
+	}
+
+	return nil
+}
+
+func (c OutboxConfig) validate() error {
+	if c.PublishTimeout <= 0 || c.PollInterval <= 0 || c.CleanupInterval <= 0 || c.Retention <= 0 {
+		return fmt.Errorf("config: outbox timeouts and intervals must be positive")
+	}
+	if c.BatchSize < 1 || c.CleanupBatch < 1 {
+		return fmt.Errorf("config: outbox.batch_size and outbox.cleanup_batch must be at least 1")
+	}
+	// One publish may take a blocked write plus a confirmation, and the relay keeps
+	// that much lease in reserve before each one.
+	if c.LeaseDuration < 4*c.PublishTimeout {
+		return fmt.Errorf("config: outbox.lease_duration must be at least four times outbox.publish_timeout")
+	}
+	if c.RetryInitialInterval <= 0 || c.RetryMaxInterval < c.RetryInitialInterval {
+		return fmt.Errorf("config: outbox.retry_initial_interval must be positive and not above retry_max_interval")
 	}
 
 	return nil

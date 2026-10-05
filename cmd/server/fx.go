@@ -9,6 +9,7 @@ import (
 	"github.com/webitel/webitel-emails/internal/distribution"
 	grpchandler "github.com/webitel/webitel-emails/internal/handler/grpc"
 	"github.com/webitel/webitel-emails/internal/inbound"
+	"github.com/webitel/webitel-emails/internal/outbox"
 	"github.com/webitel/webitel-emails/internal/polling"
 	"github.com/webitel/webitel-emails/internal/service"
 	storepostgres "github.com/webitel/webitel-emails/internal/store/postgres"
@@ -29,6 +30,7 @@ func modules(cfg *config.Config) fx.Option {
 		grpchandler.Module,
 		distribution.Module,
 		inbound.Module,
+		outbox.Module,
 		polling.Module,
 	)
 }

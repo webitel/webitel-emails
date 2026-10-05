@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -17,6 +18,8 @@ type fakeStore struct {
 	recipients     map[int64][]*model.EmailRecipient
 	attachments    map[int64][]*model.EmailMessageAttachment
 	failures       []*model.InboundFailure
+	outbox         []*model.OutboxEvent
+	flowID         *int64
 	nextID         int64
 	calls          []string
 	messageErr     error
@@ -49,9 +52,10 @@ func (f *fakeStore) WithinTransaction(ctx context.Context, fn func(context.Conte
 	f.transactions++
 	threads := slices.Clone(f.threads)
 	messages := slices.Clone(f.messages)
+	outbox := slices.Clone(f.outbox)
 
 	if err := fn(ctx, f); err != nil {
-		f.threads, f.messages = threads, messages
+		f.threads, f.messages, f.outbox = threads, messages, outbox
 
 		return err
 	}
@@ -74,6 +78,11 @@ func (f *fakeStore) EmailMessageAttachmentStore() store.EmailMessageAttachmentSt
 }
 
 func (f *fakeStore) InboundFailureStore() store.InboundFailureStore { return fakeFailureStore{f} }
+func (f *fakeStore) OutboxStore() store.OutboxStore                 { return fakeOutboxStore{f} }
+
+func (f *fakeStore) EmailProfileRoutingStore() store.EmailProfileRoutingStore {
+	return fakeRoutingStore{f}
+}
 
 func (f *fakeStore) EnsureEmailProfileAssignment(
 	context.Context,
@@ -480,4 +489,52 @@ func (f fakeFailureStore) Record(_ context.Context, failure *model.InboundFailur
 	f.failures = append(f.failures, failure)
 
 	return nil
+}
+
+type fakeOutboxStore struct{ *fakeStore }
+
+var _ store.OutboxStore = fakeOutboxStore{}
+
+// Append skips a repeated business event, as the partial unique index does.
+func (f fakeOutboxStore) Append(_ context.Context, event *model.OutboxEvent) (bool, error) {
+	f.record("append_outbox")
+
+	for _, stored := range f.outbox {
+		if event.DedupKey != "" && stored.EventType == event.EventType && stored.DedupKey == event.DedupKey {
+			return false, nil
+		}
+	}
+	f.outbox = append(f.outbox, event)
+
+	return true, nil
+}
+
+var errFakeNotFound = errors.New("fake: not found")
+
+func (f fakeThreadStore) Get(_ context.Context, _, threadID int64) (*model.EmailThread, error) {
+	if thread := f.threadByID(threadID, store.EmailThreadLookup{}); thread != nil {
+		return thread, nil
+	}
+
+	return nil, errFakeNotFound
+}
+
+func (f fakeMessageStore) Get(_ context.Context, _, messageID int64) (*model.EmailMessage, error) {
+	if message := f.messageByID(messageID); message != nil {
+		return message, nil
+	}
+
+	return nil, errFakeNotFound
+}
+
+func (f fakeRecipientStore) List(_ context.Context, _, messageID int64) ([]*model.EmailRecipient, error) {
+	return f.recipients[messageID], nil
+}
+
+type fakeRoutingStore struct{ *fakeStore }
+
+var _ store.EmailProfileRoutingStore = fakeRoutingStore{}
+
+func (f fakeRoutingStore) FlowID(context.Context, int64, int64) (*int64, error) {
+	return f.flowID, nil
 }

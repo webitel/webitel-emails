@@ -68,11 +68,14 @@ func newAttachmentHandler(
 ) *inbound.PersistenceHandler {
 	uow := storepostgres.NewUnitOfWork(db)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: maxAttempts}}
+	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: maxAttempts}, InboundEvent: config.InboundEventConfig{
+		MaxBodyTextSize: 64 << 10, MaxAddressesPerType: 100, MaxAttachments: 100, MaxFieldSize: 1024, MaxPayloadSize: 1 << 20,
+	}}
 
-	completer := inbound.NewMessageCompleter(uow, files, stubContacts{}, cfg, log)
+	events := inbound.NewEventWriter(cfg, log)
+	completer := inbound.NewMessageCompleter(uow, files, stubContacts{}, events, cfg, log)
 
-	return inbound.NewPersistenceHandler(uow, completer, log)
+	return inbound.NewPersistenceHandler(uow, completer, events, log)
 }
 
 func emailWithAttachment(profileID int64, messageID string, uid uint32) *model.ParsedEmail {

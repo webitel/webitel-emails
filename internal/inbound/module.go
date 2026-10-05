@@ -16,6 +16,7 @@ var Module = fx.Module(
 		// Bound here so infra stays unaware of this package.
 		func(client *storageinfra.Client) FileUploader { return client },
 		func(client *contactsinfra.Client) ContactResolver { return client },
+		NewEventWriter,
 		NewMessageCompleter,
 		fx.Annotate(NewPersistenceHandler, fx.As(new(ParsedMessageHandler))),
 		NewMIMEHandler,

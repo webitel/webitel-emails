@@ -22,11 +22,14 @@ import (
 func newHandler(db *sql.DB) *inbound.PersistenceHandler {
 	uow := storepostgres.NewUnitOfWork(db)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}}
+	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}, InboundEvent: config.InboundEventConfig{
+		MaxBodyTextSize: 64 << 10, MaxAddressesPerType: 100, MaxAttachments: 100, MaxFieldSize: 1024, MaxPayloadSize: 1 << 20,
+	}}
 
-	completer := inbound.NewMessageCompleter(uow, nil, stubContacts{}, cfg, log)
+	events := inbound.NewEventWriter(cfg, log)
+	completer := inbound.NewMessageCompleter(uow, nil, stubContacts{}, events, cfg, log)
 
-	return inbound.NewPersistenceHandler(uow, completer, log)
+	return inbound.NewPersistenceHandler(uow, completer, events, log)
 }
 
 type emailOption func(*model.ParsedEmail)
