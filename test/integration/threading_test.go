@@ -202,7 +202,7 @@ func TestRegularEmailNeverJoinsServiceThreadInSQL(t *testing.T) {
 			}
 
 			var kind, status string
-			if err := db.QueryRowContext(context.Background(),
+			if err := db.QueryRow(context.Background(),
 				`SELECT kind, status FROM email.thread WHERE id = $1`, ordinaryThread).Scan(&kind, &status); err != nil {
 				t.Fatalf("read ordinary thread: %v", err)
 			}
@@ -241,7 +241,7 @@ func TestThreadingIsScopedToDomainAndProfileInSQL(t *testing.T) {
 		t.Fatalf("deliver owner child: %v", err)
 	}
 	var messages int
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT count(*) FROM email.message WHERE thread_id = (
     SELECT thread_id FROM email.message
     WHERE domain_id = 1 AND profile_id = $1 AND message_id = '<owner-child@x>'
@@ -319,7 +319,7 @@ func TestDeduplicationAcrossIdentities(t *testing.T) {
 		testhelpers.Reset(t, db)
 		profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 		threadID := seedThread(t, db, 1, profileID, "regular", "new", nil)
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.message (
     domain_id, thread_id, profile_id, direction, state, message_id, received_at
 ) VALUES (1, $1, $2, 'outbound', 'ready', '<direction@x>', now())`, threadID, profileID); err != nil {
@@ -344,7 +344,7 @@ INSERT INTO email.message (
 		}
 
 		var messageID, threadID int64
-		if err := db.QueryRowContext(context.Background(), `
+		if err := db.QueryRow(context.Background(), `
 SELECT id, thread_id FROM email.message WHERE domain_id = 1 AND profile_id = $1 AND message_id = $2`,
 			profileID, email.MessageID).Scan(&messageID, &threadID); err != nil {
 			t.Fatalf("read stored identity: %v", err)
@@ -354,11 +354,11 @@ SELECT id, thread_id FROM email.message WHERE domain_id = 1 AND profile_id = $1 
 		if err := handler.Handle(context.Background(), email); err != nil {
 			t.Fatalf("ready retry: %v", err)
 		}
-		if _, err := db.ExecContext(context.Background(),
+		if _, err := db.Exec(context.Background(),
 			`UPDATE email.message SET state = 'failed' WHERE id = $1`, messageID); err != nil {
 			t.Fatalf("mark failed: %v", err)
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.inbound_failure (domain_id, profile_id, mailbox, uid_validity, uid, category, reason)
 VALUES (1, $1, 'INBOX', 10, 21, 'attachment_upload', 'failed to store attachments')`, profileID); err != nil {
 			t.Fatalf("seed quarantine: %v", err)
@@ -368,7 +368,7 @@ VALUES (1, $1, 'INBOX', 10, 21, 'attachment_upload', 'failed to store attachment
 		}
 
 		var storedMessageID, storedThreadID int64
-		if err := db.QueryRowContext(context.Background(), `
+		if err := db.QueryRow(context.Background(), `
 SELECT id, thread_id FROM email.message WHERE domain_id = 1 AND profile_id = $1 AND message_id = $2`,
 			profileID, email.MessageID).Scan(&storedMessageID, &storedThreadID); err != nil {
 			t.Fatalf("read identity after retries: %v", err)

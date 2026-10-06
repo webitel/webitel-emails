@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/webitel/webitel-emails/config"
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/model"
@@ -19,7 +21,7 @@ import (
 	"github.com/webitel/webitel-emails/test/integration/testhelpers"
 )
 
-func newHandler(db *sql.DB) *inbound.PersistenceHandler {
+func newHandler(db *pgxpool.Pool) *inbound.PersistenceHandler {
 	uow := storepostgres.NewUnitOfWork(db)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{Storage: config.StorageConfig{MaxAttachmentAttempts: 3}, InboundEvent: config.InboundEventConfig{
@@ -106,13 +108,13 @@ func TestPersistenceRoundTrip(t *testing.T) {
 		threadSubject, threadKind, threadStatus string
 		lastMessageAt                           sql.NullTime
 	)
-	err := db.QueryRowContext(context.Background(), `
+	err := db.QueryRow(context.Background(), `
 SELECT m.message_id, m.direction, m.kind, m.state, m.message_references,
        m.subject, m.body_text, m.body_html,
        m.bounce_original_message_id, m.bounce_recipient, m.bounce_status, m.bounce_diagnostic_code,
        m.sent_at, m.received_at, t.subject, t.kind, t.status, t.last_message_at
 FROM email.message m JOIN email.thread t ON t.id = m.thread_id`).
-		Scan(&messageID, &direction, &kind, &state, pqArray(&references),
+		Scan(&messageID, &direction, &kind, &state, &references,
 			&subject, &bodyText, &bodyHTML,
 			&bounceOriginal, &bounceRecipient, &bounceStatus, &bounceDiagnostic,
 			&sentAt, &receivedAt, &threadSubject, &threadKind, &threadStatus, &lastMessageAt)

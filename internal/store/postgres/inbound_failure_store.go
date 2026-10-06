@@ -40,7 +40,7 @@ ON CONFLICT (domain_id, profile_id, mailbox, uid_validity, uid) DO UPDATE SET
 		size = failure.Size
 	}
 
-	_, err := s.db.ExecContext(
+	_, err := s.db.Exec(
 		ctx,
 		query,
 		failure.DomainID,
@@ -51,9 +51,9 @@ ON CONFLICT (domain_id, profile_id, mailbox, uid_validity, uid) DO UPDATE SET
 		failure.Category,
 		failure.Reason,
 		size,
-		nullableText(failure.MessageID),
-		nullableText(failure.Sender),
-		nullableText(failure.Subject),
+		nullIfEmpty(failure.MessageID),
+		nullIfEmpty(failure.Sender),
+		nullIfEmpty(failure.Subject),
 	)
 
 	return ParseError(err)

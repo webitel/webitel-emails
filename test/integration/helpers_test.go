@@ -5,12 +5,11 @@ package integration_test
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func checksumOf(raw string) []byte {
@@ -19,9 +18,7 @@ func checksumOf(raw string) []byte {
 	return sum[:]
 }
 
-func pqArray(target *[]string) any { return pq.Array(target) }
-
-func seedThread(t *testing.T, db *sql.DB, domainID, profileID int64, kind, status string, completedAt *time.Time) int64 {
+func seedThread(t *testing.T, db *pgxpool.Pool, domainID, profileID int64, kind, status string, completedAt *time.Time) int64 {
 	t.Helper()
 
 	// The resolution state follows the kind, as it does for a Thread the service
@@ -32,7 +29,7 @@ func seedThread(t *testing.T, db *sql.DB, domainID, profileID int64, kind, statu
 	}
 
 	var id int64
-	err := db.QueryRowContext(context.Background(), `
+	err := db.QueryRow(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status, subject, completed_at, contact_resolution_state)
 VALUES ($1, $2, $3, $4, 'Subject', $5, $6) RETURNING id`,
 		domainID, profileID, kind, status, completedAt, resolution).Scan(&id)
@@ -43,11 +40,11 @@ VALUES ($1, $2, $3, $4, 'Subject', $5, $6) RETURNING id`,
 	return id
 }
 
-func count(t *testing.T, db *sql.DB, query string, args ...any) int {
+func count(t *testing.T, db *pgxpool.Pool, query string, args ...any) int {
 	t.Helper()
 
 	var total int
-	if err := db.QueryRowContext(context.Background(), query, args...).Scan(&total); err != nil {
+	if err := db.QueryRow(context.Background(), query, args...).Scan(&total); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 
@@ -55,10 +52,10 @@ func count(t *testing.T, db *sql.DB, query string, args ...any) int {
 }
 
 // readRecipients returns "type:address:ordinal" in storage order.
-func readRecipients(t *testing.T, db *sql.DB) []string {
+func readRecipients(t *testing.T, db *pgxpool.Pool) []string {
 	t.Helper()
 
-	rows, err := db.QueryContext(context.Background(), `
+	rows, err := db.Query(context.Background(), `
 SELECT type, normalized_address, ordinal FROM email.recipient ORDER BY id`)
 	if err != nil {
 		t.Fatalf("read recipients: %v", err)
@@ -82,11 +79,11 @@ SELECT type, normalized_address, ordinal FROM email.recipient ORDER BY id`)
 }
 
 // threadOf returns the thread a stored message belongs to.
-func threadOf(t *testing.T, db *sql.DB, messageID string) int64 {
+func threadOf(t *testing.T, db *pgxpool.Pool, messageID string) int64 {
 	t.Helper()
 
 	var id int64
-	if err := db.QueryRowContext(context.Background(),
+	if err := db.QueryRow(context.Background(),
 		`SELECT thread_id FROM email.message WHERE message_id = $1`, messageID).Scan(&id); err != nil {
 		t.Fatalf("thread of %s: %v", messageID, err)
 	}

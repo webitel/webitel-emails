@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	stderrors "errors"
 	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
@@ -15,6 +17,7 @@ import (
 type unitOfWork struct {
 	db      Database
 	querier Querier
+	inTx    bool
 }
 
 var _ store.UnitOfWork = (*unitOfWork)(nil)
@@ -70,7 +73,7 @@ SELECT 1 FROM email.profile_runtime
 WHERE profile_id = $1 AND owner_instance_id = $2 AND assignment_generation = $3`
 
 	var fenced int
-	err := u.querier.QueryRowContext(
+	err := u.querier.QueryRow(
 		ctx,
 		query,
 		assignment.ProfileID,
@@ -79,7 +82,7 @@ WHERE profile_id = $1 AND owner_instance_id = $2 AND assignment_generation = $3`
 	).Scan(&fenced)
 
 	switch {
-	case stderrors.Is(err, sql.ErrNoRows):
+	case stderrors.Is(err, pgx.ErrNoRows):
 		return store.ErrStaleEmailProfileAssignment
 	case err != nil:
 		return fmt.Errorf("store: check email profile %d assignment: %w", assignment.ProfileID, err)
@@ -96,7 +99,7 @@ const emailProfileLockNamespace = 0x454D4C53
 // waits for the current holder; a canceled context aborts the wait.
 func (u *unitOfWork) LockEmailProfile(ctx context.Context, profileID int64) error {
 	key := int64(emailProfileLockNamespace)<<32 | int64(uint32(profileID))
-	if _, err := u.querier.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
+	if _, err := u.querier.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
 		return fmt.Errorf("store: lock email profile %d: %w", profileID, err)
 	}
 
@@ -109,11 +112,11 @@ func (u *unitOfWork) WithinTransaction(
 	ctx context.Context,
 	fn func(ctx context.Context, uow store.UnitOfWork) error,
 ) error {
-	if _, ok := u.querier.(*sql.Tx); ok {
+	if u.inTx {
 		return fn(ctx, u)
 	}
 
-	tx, err := u.db.BeginTx(ctx, nil)
+	tx, err := u.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("store: begin transaction: %w", err)
 	}
@@ -122,34 +125,37 @@ func (u *unitOfWork) WithinTransaction(
 	// querier switches to the transaction.
 	txUow := *u
 	txUow.querier = tx
+	txUow.inTx = true
 
 	defer func() {
 		if p := recover(); p != nil {
-			_ = rollback(tx)
+			_ = rollback(ctx, tx)
 
 			panic(p)
 		}
 	}()
 
 	if err := fn(ctx, &txUow); err != nil {
-		if rbErr := rollback(tx); rbErr != nil {
+		if rbErr := rollback(ctx, tx); rbErr != nil {
 			return fmt.Errorf("%w (rollback: %v)", err, rbErr)
 		}
 
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: commit transaction: %w", err)
 	}
 
 	return nil
 }
 
-// rollback ignores ErrTxDone: once ctx is canceled database/sql rolls the
-// transaction back on its own, and the explicit rollback then finds it done.
-func rollback(tx *sql.Tx) error {
-	if err := tx.Rollback(); err != nil && !stderrors.Is(err, sql.ErrTxDone) {
+// rollback uses its own deadline because the operation context may be canceled.
+func rollback(operationCtx context.Context, tx pgx.Tx) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(operationCtx), 5*time.Second)
+	defer cancel()
+
+	if err := tx.Rollback(ctx); err != nil && !stderrors.Is(err, pgx.ErrTxClosed) {
 		return err
 	}
 

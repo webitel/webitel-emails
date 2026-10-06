@@ -1,7 +1,4 @@
 -- +goose Up
--- Keeps a runtime row in the same domain as its profile.
-CREATE UNIQUE INDEX profile_domain_id_uidx ON email.profile (domain_id, id);
-
 CREATE TABLE email.profile_runtime (
     profile_id            bigint PRIMARY KEY,
     domain_id             bigint NOT NULL,
@@ -40,4 +37,3 @@ CREATE INDEX profile_runtime_owner_next_check_idx
 
 -- +goose Down
 DROP TABLE IF EXISTS email.profile_runtime;
-DROP INDEX IF EXISTS email.profile_domain_id_uidx;

@@ -65,10 +65,13 @@ Thread with its Messages. Attachments and inline images are uploaded to the
 
 A Message that becomes `ready` writes an event to the Transactional Outbox, and
 `flow_manager` starts the Flow of its profile from it; see
-[docs/events.md](docs/events.md), including the rollout order. A Flow cannot yet
-hand the Thread to an operator queue, because `EmailJoinToQueue` arrives with a
-later task. Do not enable polling in production until then, or emails will reach
-their Flow and never an operator.
+[docs/events.md](docs/events.md), including the rollout order. The Flow can put
+the Thread into an Inbound Email Queue of `call_center` with its `joinQueue`
+application, but the queue does not assign agents yet: emails wait there and
+never reach an operator. Do not enable polling in production until agent
+distribution for Inbound Email Queues is implemented; it will also need
+compatible `call_center`, `flow_manager` and `engine` releases and a configured
+Inbound Email Queue.
 
 Configuration can also be supplied through environment variables. For local
 development, copy `.env.example` to `.env`, adjust its values, and export them

@@ -6,14 +6,12 @@ import (
 	"context"
 	"fmt"
 
+	kitdiscovery "github.com/webitel/webitel-go-kit/infra/discovery"
+	"github.com/webitel/webitel-go-kit/infra/transport/gRPC/resolver/discovery"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.uber.org/fx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	_ "github.com/mbobakov/grpc-consul-resolver"
-
-	"github.com/webitel/webitel-emails/config"
 )
 
 // ServiceName is how go.webitel.app registers itself in Consul.
@@ -31,12 +29,13 @@ var Module = fx.Module("webitelapp", fx.Provide(New))
 // New opens one connection for every go.webitel.app client of this service.
 // A single HTTP/2 connection carries concurrent unary calls, so these short
 // requests need no connection pool; only streaming clients, such as storage, do.
-func New(cfg *config.Config, lifecycle fx.Lifecycle) (Conn, error) {
+func New(provider kitdiscovery.DiscoveryProvider, lifecycle fx.Lifecycle) (Conn, error) {
 	conn, err := grpc.NewClient(
-		fmt.Sprintf("consul://%s/%s?wait=14s", cfg.Consul.Addr, ServiceName),
+		fmt.Sprintf("discovery:///%s", ServiceName),
 		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithResolvers(discovery.NewBuilder(provider, discovery.WithInsecure(true))),
 	)
 	if err != nil {
 		return Conn{}, fmt.Errorf("webitelapp: create client: %w", err)

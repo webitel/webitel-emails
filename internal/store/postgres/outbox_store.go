@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
@@ -28,7 +29,7 @@ func NewOutboxStore(db Querier) *outboxStore {
 }
 
 func (s *outboxStore) Append(ctx context.Context, event *model.OutboxEvent) (bool, error) {
-	if _, ok := s.db.(*sql.Tx); !ok {
+	if _, ok := s.db.(pgx.Tx); !ok {
 		return false, store.ErrOutboxNeedsTransaction
 	}
 	if err := event.Validate(); err != nil {
@@ -44,14 +45,14 @@ INSERT INTO email.outbox (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (event_type, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING`
 
-	result, err := s.db.ExecContext(
+	result, err := s.db.Exec(
 		ctx,
 		query,
 		event.EventID.String(),
 		event.DomainID,
 		event.EventType,
 		event.SchemaVersion,
-		nullableText(event.DedupKey),
+		nullIfEmpty(event.DedupKey),
 		event.Exchange,
 		event.RoutingKey,
 		string(event.Payload),
@@ -60,12 +61,7 @@ ON CONFLICT (event_type, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING`
 		return false, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, ParseError(err)
-	}
-
-	return affected == 1, nil
+	return result.RowsAffected() == 1, nil
 }
 
 type outboxRelayStore struct {
@@ -85,7 +81,7 @@ UPDATE email.outbox SET
     state = 'pending', locked_by = NULL, locked_until = NULL, updated_at = now()
 WHERE state = 'processing' AND (locked_until < now() OR ($2 AND locked_by = $1))`
 
-	return affectedRows(s.db.ExecContext(ctx, query, owner, own))
+	return affectedRows(s.db.Exec(ctx, query, owner, own))
 }
 
 func (s *outboxRelayStore) Claim(
@@ -112,7 +108,7 @@ RETURNING o.event_id, o.domain_id, o.event_type, o.schema_version, o.dedup_key,
     o.exchange, o.routing_key, o.payload::text, o.state, o.attempts,
     o.next_attempt_at, o.locked_by, o.locked_until, o.created_at, o.updated_at`
 
-	rows, err := s.db.QueryContext(ctx, query, owner, limit, lease.Milliseconds())
+	rows, err := s.db.Query(ctx, query, owner, limit, lease.Milliseconds())
 	if err != nil {
 		return nil, ParseError(err)
 	}
@@ -170,7 +166,7 @@ UPDATE email.outbox SET
     last_error = NULL, updated_at = now()
 WHERE event_id = $1 AND state = 'processing' AND locked_by = $2`
 
-	affected, err := affectedRows(s.db.ExecContext(ctx, query, eventID.String(), owner))
+	affected, err := affectedRows(s.db.Exec(ctx, query, eventID.String(), owner))
 
 	return affected == 1, err
 }
@@ -196,7 +192,7 @@ UPDATE email.outbox SET
     next_attempt_at = $3, updated_at = now()
 WHERE event_id = ANY($2::uuid[]) AND state = 'processing' AND locked_by = $1`
 
-	_, err := s.db.ExecContext(ctx, query, owner, pq.Array(ids), nextAttemptAt)
+	_, err := s.db.Exec(ctx, query, owner, ids, nextAttemptAt)
 
 	return ParseError(err)
 }
@@ -213,7 +209,7 @@ UPDATE email.outbox SET
     locked_by = NULL, locked_until = NULL, updated_at = now()
 WHERE event_id = $1 AND state = 'processing' AND locked_by = $2`
 
-	affected, err := affectedRows(s.db.ExecContext(ctx, query, eventID.String(), owner, reason))
+	affected, err := affectedRows(s.db.Exec(ctx, query, eventID.String(), owner, reason))
 
 	return affected == 1, err
 }
@@ -228,7 +224,7 @@ WHERE event_id IN (
     LIMIT $2
 )`
 
-	return affectedRows(s.db.ExecContext(ctx, query, before, limit))
+	return affectedRows(s.db.Exec(ctx, query, before, limit))
 }
 
 func (s *outboxRelayStore) Backlog(ctx context.Context) (store.OutboxBacklog, error) {
@@ -247,7 +243,7 @@ SELECT
 		backlog store.OutboxBacklog
 		seconds float64
 	)
-	if err := s.db.QueryRowContext(ctx, query).Scan(
+	if err := s.db.QueryRow(ctx, query).Scan(
 		&backlog.Pending, &backlog.Processing, &backlog.Failed, &seconds,
 	); err != nil {
 		return store.OutboxBacklog{}, ParseError(err)
@@ -257,15 +253,10 @@ SELECT
 	return backlog, nil
 }
 
-func affectedRows(result sql.Result, err error) (int64, error) {
+func affectedRows(result pgconn.CommandTag, err error) (int64, error) {
 	if err != nil {
 		return 0, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, ParseError(err)
-	}
-
-	return affected, nil
+	return result.RowsAffected(), nil
 }

@@ -75,7 +75,8 @@ type EmailThreadStore interface {
 }
 
 // EmailMessageStore persists Messages and finds already stored ones by the three
-// identities an inbound email can be recognized by.
+// identities an inbound email can be recognized by. A Locate method returns a nil
+// identity and no error when nothing matches; the caller decides which apply.
 type EmailMessageStore interface {
 	// LocateByMessageID finds a message by its mail identifier, in both directions.
 	LocateByMessageID(ctx context.Context, domainID, profileID int64, messageID string) (*EmailMessageIdentity, error)

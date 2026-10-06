@@ -46,7 +46,7 @@ func TestQuarantineRecordIsIdempotent(t *testing.T) {
 	}
 	var reason, subject string
 	var size int64
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT reason, message_size, subject
 FROM email.inbound_failure
 WHERE domain_id = 1 AND profile_id = $1 AND mailbox = 'INBOX' AND uid_validity = 10 AND uid = 5`,

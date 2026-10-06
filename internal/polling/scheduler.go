@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	kitdiscovery "github.com/webitel/webitel-go-kit/infra/discovery"
 	"go.uber.org/fx"
 
 	"github.com/webitel/webitel-emails/config"
+	servicediscovery "github.com/webitel/webitel-emails/infra/discovery"
 	mailinfra "github.com/webitel/webitel-emails/infra/mail"
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/model"
@@ -64,7 +64,7 @@ type session struct {
 	idleTimeout time.Duration
 }
 
-// Params are the scheduler dependencies; Discovery makes it stop before Consul deregistration.
+// Params are the scheduler dependencies; Registered orders shutdown before deregistration.
 type Params struct {
 	fx.In
 
@@ -75,7 +75,7 @@ type Params struct {
 	Profiles   *service.EmailProfileService
 	IMAP       mailinfra.IMAPClient
 	Handler    inbound.Handler
-	Discovery  kitdiscovery.DiscoveryProvider
+	Registered servicediscovery.Registration
 	Log        *slog.Logger
 	Lifecycle  fx.Lifecycle
 }

@@ -2,21 +2,21 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Querier is the part of database/sql shared by *sql.DB and *sql.Tx, so a store
-// runs the same code inside and outside a transaction.
+// Querier is the pgx surface shared by the pool and a transaction.
 type Querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
 }
 
-// Database is the connection pool the unit of work runs on; *sql.DB satisfies it.
-// The interface keeps the unit of work testable without a live database.
+// Database is the pool surface needed to start a unit-of-work transaction.
 type Database interface {
 	Querier
 
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }

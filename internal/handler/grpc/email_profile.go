@@ -82,14 +82,13 @@ func (s *EmailProfilesServer) CreateEmailProfile(ctx context.Context, req *email
 		return nil, err
 	}
 
-	profile, err := s.service.Create(
-		ctx,
-		session.DomainID,
-		session.UserID,
-		emailProfileFromProto(req.GetInput()),
-		req.GetInput().GetPassword(),
-		req.GetInput().GetOauthClientSecret(),
-	)
+	profile, err := s.service.Create(ctx, service.CreateEmailProfileInput{
+		DomainID:          session.DomainID,
+		UserID:            session.UserID,
+		Profile:           emailProfileFromProto(req.GetInput()),
+		Password:          req.GetInput().GetPassword(),
+		OAuthClientSecret: req.GetInput().GetOauthClientSecret(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -110,15 +109,14 @@ func (s *EmailProfilesServer) UpdateEmailProfile(
 		return nil, err
 	}
 
-	profile, err := s.service.Update(
-		ctx,
-		session.DomainID,
-		session.UserID,
-		req.GetId(),
-		emailProfileFromProto(req.GetInput()),
-		req.GetInput().GetPassword(),
-		req.GetInput().GetOauthClientSecret(),
-	)
+	profile, err := s.service.Update(ctx, service.UpdateEmailProfileInput{
+		DomainID:          session.DomainID,
+		UserID:            session.UserID,
+		ID:                req.GetId(),
+		Profile:           emailProfileFromProto(req.GetInput()),
+		Password:          req.GetInput().GetPassword(),
+		OAuthClientSecret: req.GetInput().GetOauthClientSecret(),
+	})
 	if err != nil {
 		return nil, err
 	}

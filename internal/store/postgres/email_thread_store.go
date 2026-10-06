@@ -6,7 +6,7 @@ import (
 	stderrors "errors"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
@@ -61,7 +61,7 @@ VALUES (
 )
 RETURNING ` + emailThreadColumns
 
-	created, err := scanEmailThread(s.db.QueryRowContext(
+	created, err := scanEmailThread(s.db.QueryRow(
 		ctx,
 		query,
 		thread.DomainID,
@@ -96,8 +96,8 @@ func (s *emailThreadStore) LocateByMessageIDs(
 ORDER BY array_position($3::text[], m.message_id) DESC
 LIMIT 1`
 
-	return locateEmailThread(s.db.QueryRowContext(
-		ctx, query, lookup.DomainID, lookup.ProfileID, pq.Array(messageIDs), lookup.OnlyRegular,
+	return locateEmailThread(s.db.QueryRow(
+		ctx, query, lookup.DomainID, lookup.ProfileID, messageIDs, lookup.OnlyRegular,
 	))
 }
 
@@ -116,7 +116,7 @@ func (s *emailThreadStore) LocateByInReplyTo(
 ORDER BY (t.kind <> 'regular'), m.received_at, m.id
 LIMIT 1`
 
-	return locateEmailThread(s.db.QueryRowContext(
+	return locateEmailThread(s.db.QueryRow(
 		ctx, query, lookup.DomainID, lookup.ProfileID, inReplyTo, lookup.OnlyRegular,
 	))
 }
@@ -137,7 +137,7 @@ UPDATE email.thread SET
 WHERE domain_id = $1 AND id = $2 AND kind = $3
     AND contact_resolution_state IN ('pending', 'unavailable')`
 
-	result, err := s.db.ExecContext(
+	result, err := s.db.Exec(
 		ctx,
 		query,
 		domainID,
@@ -150,12 +150,7 @@ WHERE domain_id = $1 AND id = $2 AND kind = $3
 		return false, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return affected > 0, nil
+	return result.RowsAffected() > 0, nil
 }
 
 // SetContactManually is not limited to the states automatic resolution may write:
@@ -173,7 +168,7 @@ UPDATE email.thread SET
     updated_at = now()
 WHERE domain_id = $1 AND id = $2 AND kind = $3`
 
-	result, err := s.db.ExecContext(
+	result, err := s.db.Exec(
 		ctx,
 		query,
 		domainID,
@@ -185,12 +180,7 @@ WHERE domain_id = $1 AND id = $2 AND kind = $3`
 		return false, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return affected > 0, nil
+	return result.RowsAffected() > 0, nil
 }
 
 // FirstSenderAddress takes the sender of the earliest message of the Thread by
@@ -218,10 +208,10 @@ LEFT JOIN email.recipient r
     AND r.type = 'from' AND r.ordinal = 0`
 
 	var address sql.NullString
-	if err := s.db.QueryRowContext(ctx, query, domainID, threadID).Scan(&address); err != nil {
+	if err := s.db.QueryRow(ctx, query, domainID, threadID).Scan(&address); err != nil {
 		// No rows at all means the Thread holds no message yet; an absent sender
 		// comes back as NULL. Both leave the Thread without an address to search.
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 
@@ -243,7 +233,7 @@ SET last_message_at = $4, updated_at = now()
 WHERE domain_id = $1 AND profile_id = $2 AND id = $3
   AND (last_message_at IS NULL OR last_message_at < $4)`
 
-	_, err := s.db.ExecContext(ctx, query, domainID, profileID, threadID, at)
+	_, err := s.db.Exec(ctx, query, domainID, profileID, threadID, at)
 
 	return ParseError(err)
 }
@@ -253,7 +243,7 @@ func (s *emailThreadStore) Get(ctx context.Context, domainID, threadID int64) (*
 FROM email.thread t
 WHERE t.domain_id = $1 AND t.id = $2`
 
-	thread, err := scanEmailThread(s.db.QueryRowContext(ctx, query, domainID, threadID))
+	thread, err := scanEmailThread(s.db.QueryRow(ctx, query, domainID, threadID))
 	if err != nil {
 		return nil, ParseError(err)
 	}
@@ -266,7 +256,7 @@ WHERE t.domain_id = $1 AND t.id = $2`
 func locateEmailThread(row rowScanner) (*model.EmailThread, error) {
 	thread, err := scanEmailThread(row)
 	if err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 

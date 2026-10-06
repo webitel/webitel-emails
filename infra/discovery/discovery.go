@@ -22,12 +22,13 @@ func NewInstanceID() model.InstanceID {
 	return model.InstanceID(kitdiscovery.GenerateInstanceID(model.ServiceName))
 }
 
-func New(
+// Registration marks that the Consul registration lifecycle is installed.
+type Registration struct{}
+
+// NewProvider creates the shared Consul provider used by clients and registration.
+func NewProvider(
 	cfg *config.Config,
 	log *slog.Logger,
-	instanceID model.InstanceID,
-	_ *grpcserver.Server,
-	lifecycle fx.Lifecycle,
 ) (kitdiscovery.DiscoveryProvider, error) {
 	provider, err := kitdiscovery.DefaultFactory.CreateProvider(
 		kitdiscovery.ProviderConsul,
@@ -40,6 +41,18 @@ func New(
 		return nil, fmt.Errorf("service discovery: create Consul provider: %w", err)
 	}
 
+	return provider, nil
+}
+
+// Register installs Consul hooks after the gRPC server is constructed.
+func Register(
+	cfg *config.Config,
+	log *slog.Logger,
+	instanceID model.InstanceID,
+	_ *grpcserver.Server,
+	lifecycle fx.Lifecycle,
+	provider kitdiscovery.DiscoveryProvider,
+) Registration {
 	instance := &kitdiscovery.ServiceInstance{
 		Id:      string(instanceID),
 		Name:    model.ServiceName,
@@ -80,5 +93,5 @@ func New(
 		},
 	})
 
-	return provider, nil
+	return Registration{}
 }

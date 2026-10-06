@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/webitel/webitel-emails/config"
 	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
 	storageinfra "github.com/webitel/webitel-emails/infra/storage"
@@ -62,7 +64,7 @@ func (stubContacts) ResolveByEmail(
 }
 
 func newAttachmentHandler(
-	db *sql.DB,
+	db *pgxpool.Pool,
 	files inbound.FileUploader,
 	maxAttempts int32,
 ) *inbound.PersistenceHandler {
@@ -105,7 +107,7 @@ func TestFailedAttachmentAndQuarantineAreWrittenTogether(t *testing.T) {
 
 	var state string
 	var lastMessageAt sql.NullTime
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT m.state, t.last_message_at
 FROM email.message m JOIN email.thread t ON t.id = m.thread_id
 WHERE m.message_id = '<refused@x>'`).Scan(&state, &lastMessageAt); err != nil {
@@ -119,7 +121,7 @@ WHERE m.message_id = '<refused@x>'`).Scan(&state, &lastMessageAt); err != nil {
 	}
 
 	var category string
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT category FROM email.inbound_failure
 WHERE domain_id = 1 AND profile_id = $1 AND mailbox = 'INBOX' AND uid_validity = 10 AND uid = 5`,
 		profileID).Scan(&category); err != nil {
@@ -161,7 +163,7 @@ func TestStaleAssignmentCannotFinishAttachments(t *testing.T) {
 
 	var state string
 	var attempts int32
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT state, attachment_attempts FROM email.message WHERE message_id = '<stale@x>'`,
 	).Scan(&state, &attempts); err != nil {
 		t.Fatalf("read message: %v", err)
@@ -185,7 +187,7 @@ SELECT state, attachment_attempts FROM email.message WHERE message_id = '<stale@
 	if err := handler.Handle(context.Background(), email); err != nil {
 		t.Fatalf("redelivery under the new owner: %v", err)
 	}
-	if err := db.QueryRowContext(context.Background(),
+	if err := db.QueryRow(context.Background(),
 		`SELECT state FROM email.message WHERE message_id = '<stale@x>'`).Scan(&state); err != nil {
 		t.Fatalf("read message: %v", err)
 	}
@@ -219,7 +221,7 @@ func TestMarkReadyWaitsForEveryPart(t *testing.T) {
 	attachments := uow.EmailMessageAttachmentStore()
 
 	var messageID int64
-	if err := db.QueryRowContext(ctx,
+	if err := db.QueryRow(ctx,
 		`SELECT id FROM email.message WHERE message_id = '<waiting@x>'`).Scan(&messageID); err != nil {
 		t.Fatalf("read message: %v", err)
 	}
@@ -281,7 +283,7 @@ func TestQuarantineFailureRollsBackTheAttempt(t *testing.T) {
 
 	var state string
 	var attempts int32
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT state, attachment_attempts FROM email.message WHERE message_id = '<rollback@x>'`,
 	).Scan(&state, &attempts); err != nil {
 		t.Fatalf("read message: %v", err)

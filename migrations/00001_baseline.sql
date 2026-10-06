@@ -1,5 +1,5 @@
 -- +goose Up
--- Infrastructure-only baseline. Business tables are added by functional tasks.
+CREATE SCHEMA email;
 
 -- +goose Down
--- Infrastructure-only baseline has no database objects to remove.
+DROP SCHEMA IF EXISTS email;

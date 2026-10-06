@@ -4,11 +4,12 @@ package integration_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/webitel/webitel-emails/config"
 	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
@@ -26,7 +27,7 @@ func (knownContact) ResolveByEmail(context.Context, int64, string) (contactsinfr
 	return contactsinfra.Resolution{Outcome: contactsinfra.OutcomeResolved, ContactID: 77}, nil
 }
 
-func newEventHandler(db *sql.DB, files inbound.FileUploader, maxPayloadSize int) *inbound.PersistenceHandler {
+func newEventHandler(db *pgxpool.Pool, files inbound.FileUploader, maxPayloadSize int) *inbound.PersistenceHandler {
 	uow := storepostgres.NewUnitOfWork(db)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{
@@ -44,10 +45,10 @@ func newEventHandler(db *sql.DB, files inbound.FileUploader, maxPayloadSize int)
 }
 
 // inboundEvents decodes the stored events keyed by the RFC Message-ID.
-func inboundEvents(t *testing.T, db *sql.DB) map[string]event.InboundMessage {
+func inboundEvents(t *testing.T, db *pgxpool.Pool) map[string]event.InboundMessage {
 	t.Helper()
 
-	rows, err := db.QueryContext(context.Background(), `
+	rows, err := db.Query(context.Background(), `
 SELECT payload::text, dedup_key, schema_version FROM email.outbox WHERE event_type = $1`, event.TypeInboundMessage)
 	if err != nil {
 		t.Fatalf("read outbox: %v", err)
@@ -87,7 +88,7 @@ func TestInboundEventCommitsWithReadyMessage(t *testing.T) {
 	ctx := context.Background()
 
 	profile := testhelpers.SeedProfile(t, db, 1, "events")
-	if _, err := db.ExecContext(ctx, `UPDATE email.profile SET flow_id = 42 WHERE id = $1`, profile); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE email.profile SET flow_id = 42 WHERE id = $1`, profile); err != nil {
 		t.Fatalf("set flow: %v", err)
 	}
 

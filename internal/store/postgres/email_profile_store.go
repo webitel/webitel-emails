@@ -9,53 +9,88 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
 
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
-// emailProfileColumns is the safe read projection shared by every operation.
-// Credentials are excluded; only the presence of a refresh token is exposed.
-const emailProfileColumns = `p.id,
-    p.domain_id,
-    p.name,
-    p.description,
-    p.enabled,
-    p.email_address,
-    p.sender_name,
-    p.reply_to,
-    p.signature,
-    p.imap_host,
-    p.imap_port,
-    p.imap_security,
-    p.smtp_host,
-    p.smtp_port,
-    p.smtp_security,
-    p.username,
-    p.mailbox,
-    p.fetch_interval_seconds,
-    p.flow_id,
-    p.auth_type,
-    p.oauth_provider,
-    p.oauth_client_id,
-    p.oauth_refresh_token IS NOT NULL AS oauth_connected,
-    p.connection_state,
-    p.last_successful_connection_at,
-    p.connection_error,
-    p.created_at,
-    p.created_by,
-    COALESCE(created_by.name, created_by.username),
-    p.updated_at,
-    p.updated_by,
-    COALESCE(updated_by.name, updated_by.username)`
+// emailProfileFields maps each API field to its read columns in projection order.
+// Credentials are never listed; only the presence of a refresh token is exposed.
+var emailProfileFields = []struct {
+	name    string
+	columns []string
+}{
+	{"id", []string{"p.id"}},
+	{"domain_id", []string{"p.domain_id"}},
+	{"name", []string{"p.name"}},
+	{"description", []string{"p.description"}},
+	{"enabled", []string{"p.enabled"}},
+	{"email_address", []string{"p.email_address"}},
+	{"sender_name", []string{"p.sender_name"}},
+	{"reply_to", []string{"p.reply_to"}},
+	{"signature", []string{"p.signature"}},
+	{"imap_host", []string{"p.imap_host"}},
+	{"imap_port", []string{"p.imap_port"}},
+	{"imap_security", []string{"p.imap_security"}},
+	{"smtp_host", []string{"p.smtp_host"}},
+	{"smtp_port", []string{"p.smtp_port"}},
+	{"smtp_security", []string{"p.smtp_security"}},
+	{"username", []string{"p.username"}},
+	{"mailbox", []string{"p.mailbox"}},
+	{"fetch_interval_seconds", []string{"p.fetch_interval_seconds"}},
+	{"flow_id", []string{"p.flow_id"}},
+	{"auth_type", []string{"p.auth_type"}},
+	{"oauth_provider", []string{"p.oauth_provider"}},
+	{"oauth_client_id", []string{"p.oauth_client_id"}},
+	{"oauth_connected", []string{"p.oauth_refresh_token IS NOT NULL AS oauth_connected"}},
+	{"connection_state", []string{"p.connection_state"}},
+	{"last_successful_connection_at", []string{"p.last_successful_connection_at"}},
+	{"connection_error", []string{"p.connection_error"}},
+	{"created_at", []string{"p.created_at"}},
+	{"created_by", []string{"p.created_by", "COALESCE(created_by.name, created_by.username) AS created_by_name"}},
+	{"updated_at", []string{"p.updated_at"}},
+	{"updated_by", []string{"p.updated_by", "COALESCE(updated_by.name, updated_by.username) AS updated_by_name"}},
+}
+
+// emailProfileColumns is the full read projection used by single-profile reads.
+var emailProfileColumns = emailProfileProjection(nil)
 
 const emailProfileJoins = `
 LEFT JOIN directory.wbt_user created_by ON created_by.id = p.created_by
 LEFT JOIN directory.wbt_user updated_by ON updated_by.id = p.updated_by`
 
-const emailProfileSelect = `SELECT ` + emailProfileColumns + `
-FROM email.profile p` + emailProfileJoins
+// emailProfileProjection selects the requested known fields plus id; unknown and
+// repeated names are ignored, and no known field means the full projection.
+func emailProfileProjection(fields []string) string {
+	requested := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		requested[strings.TrimSpace(field)] = true
+	}
+
+	selectAll := true
+	for _, field := range emailProfileFields {
+		if requested[field.name] {
+			selectAll = false
+
+			break
+		}
+	}
+
+	columns := make([]string, 0, len(emailProfileFields)+2)
+	for _, field := range emailProfileFields {
+		if selectAll || field.name == "id" || requested[field.name] {
+			columns = append(columns, field.columns...)
+		}
+	}
+
+	return strings.Join(columns, ", ")
+}
+
+func emailProfileSelect(columns string) string {
+	return "SELECT " + columns + "\nFROM email.profile p" + emailProfileJoins
+}
 
 const (
 	defaultEmailProfilePage = 1
@@ -74,57 +109,57 @@ var emailProfileSortFields = map[string]string{
 }
 
 type emailProfileStore struct {
-	db *sql.DB
+	db Querier
 }
 
 var _ store.EmailProfileStore = (*emailProfileStore)(nil)
 
 // NewEmailProfileStore creates an Email Profile store over the shared database connection.
-func NewEmailProfileStore(db *sql.DB) *emailProfileStore {
+func NewEmailProfileStore(db Querier) *emailProfileStore {
 	return &emailProfileStore{db: db}
 }
 
 // emailProfileRecord is the flat SQL scan target. Nullable database values are
 // converted to domain-friendly zero values or pointers by mapEmailProfile.
 type emailProfileRecord struct {
-	ID       int64
-	DomainID int64
+	ID       int64 `db:"id"`
+	DomainID int64 `db:"domain_id"`
 
-	Name        string
-	Description string
-	Enabled     bool
+	Name        string `db:"name"`
+	Description string `db:"description"`
+	Enabled     bool   `db:"enabled"`
 
-	EmailAddress string
-	SenderName   string
-	ReplyTo      string
-	Signature    string
+	EmailAddress string `db:"email_address"`
+	SenderName   string `db:"sender_name"`
+	ReplyTo      string `db:"reply_to"`
+	Signature    string `db:"signature"`
 
-	IMAPHost             string
-	IMAPPort             int32
-	IMAPSecurity         string
-	SMTPHost             string
-	SMTPPort             int32
-	SMTPSecurity         string
-	Username             string
-	Mailbox              string
-	FetchIntervalSeconds int32
+	IMAPHost             string `db:"imap_host"`
+	IMAPPort             int32  `db:"imap_port"`
+	IMAPSecurity         string `db:"imap_security"`
+	SMTPHost             string `db:"smtp_host"`
+	SMTPPort             int32  `db:"smtp_port"`
+	SMTPSecurity         string `db:"smtp_security"`
+	Username             string `db:"username"`
+	Mailbox              string `db:"mailbox"`
+	FetchIntervalSeconds int32  `db:"fetch_interval_seconds"`
 
-	FlowID         sql.NullInt64
-	AuthType       string
-	OAuthProvider  sql.NullString
-	OAuthClientID  sql.NullString
-	OAuthConnected bool
+	FlowID         sql.NullInt64  `db:"flow_id"`
+	AuthType       string         `db:"auth_type"`
+	OAuthProvider  sql.NullString `db:"oauth_provider"`
+	OAuthClientID  sql.NullString `db:"oauth_client_id"`
+	OAuthConnected bool           `db:"oauth_connected"`
 
-	ConnectionState            string
-	LastSuccessfulConnectionAt sql.NullTime
-	ConnectionError            sql.NullString
+	ConnectionState            string         `db:"connection_state"`
+	LastSuccessfulConnectionAt sql.NullTime   `db:"last_successful_connection_at"`
+	ConnectionError            sql.NullString `db:"connection_error"`
 
-	CreatedAt     time.Time
-	CreatedByID   sql.NullInt64
-	CreatedByName sql.NullString
-	UpdatedAt     time.Time
-	UpdatedByID   sql.NullInt64
-	UpdatedByName sql.NullString
+	CreatedAt     time.Time      `db:"created_at"`
+	CreatedByID   sql.NullInt64  `db:"created_by"`
+	CreatedByName sql.NullString `db:"created_by_name"`
+	UpdatedAt     time.Time      `db:"updated_at"`
+	UpdatedByID   sql.NullInt64  `db:"updated_by"`
+	UpdatedByName sql.NullString `db:"updated_by_name"`
 }
 
 type rowScanner interface {
@@ -132,26 +167,22 @@ type rowScanner interface {
 }
 
 func (s *emailProfileStore) Locate(ctx context.Context, domainID, id int64) (*model.EmailProfile, error) {
-	row := s.db.QueryRowContext(
+	return collectEmailProfile(s.db.Query(
 		ctx,
-		emailProfileSelect+" WHERE p.domain_id = $1 AND p.id = $2",
+		emailProfileSelect(emailProfileColumns)+" WHERE p.domain_id = $1 AND p.id = $2",
 		domainID,
 		id,
-	)
-
-	return scanEmailProfile(row)
+	))
 }
 
 func (s *emailProfileStore) List(ctx context.Context, domainID int64, filter model.EmailProfileFilter) ([]*model.EmailProfile, bool, error) {
-	query := emailProfileSelect + " WHERE p.domain_id = $1"
+	query := emailProfileSelect(emailProfileProjection(filter.Fields)) + " WHERE p.domain_id = $1"
 	args := []any{domainID}
 
 	if search := strings.TrimSpace(filter.Query); search != "" {
-		args = append(args, "%"+search+"%")
-		placeholder := fmt.Sprintf("$%d", len(args))
-		query += " AND (p.name ILIKE " + placeholder +
-			" OR p.description ILIKE " + placeholder +
-			" OR p.email_address ILIKE " + placeholder + ")"
+		args = append(args, likePattern(search))
+		match := fmt.Sprintf(" ILIKE $%d ESCAPE '\\'", len(args))
+		query += " AND (p.name" + match + " OR p.description" + match + " OR p.email_address" + match + ")"
 	}
 
 	query += " ORDER BY " + emailProfileOrderBy(filter.Sort)
@@ -165,24 +196,18 @@ func (s *emailProfileStore) List(ctx context.Context, domainID int64, filter mod
 		query += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-
-	profiles := make([]*model.EmailProfile, 0)
-	for rows.Next() {
-		profile, err := scanEmailProfile(rows)
-		if err != nil {
-			return nil, false, err
-		}
-
-		profiles = append(profiles, profile)
+	records, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByNameLax[emailProfileRecord])
+	if err != nil {
+		return nil, false, err
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, false, err
+	profiles := make([]*model.EmailProfile, 0, len(records))
+	for _, record := range records {
+		profiles = append(profiles, mapEmailProfile(record))
 	}
 
 	if size > 0 && len(profiles) > size {
@@ -192,9 +217,7 @@ func (s *emailProfileStore) List(ctx context.Context, domainID int64, filter mod
 	return profiles, false, nil
 }
 
-func (s *emailProfileStore) Create(ctx context.Context, domainID, userID int64, profile *model.EmailProfile, password, oauthClientSecret []byte) (*model.EmailProfile, error) {
-	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
-
+func (s *emailProfileStore) Create(ctx context.Context, params store.CreateEmailProfileParams) (*model.EmailProfile, error) {
 	const query = `
 INSERT INTO email.profile (
     domain_id,
@@ -223,129 +246,129 @@ INSERT INTO email.profile (
     created_by,
     updated_by
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+    @domain_id,
+    @name,
+    @description,
+    @enabled,
+    @email_address,
+    @sender_name,
+    @reply_to,
+    @signature,
+    @imap_host,
+    @imap_port,
+    @imap_security,
+    @smtp_host,
+    @smtp_port,
+    @smtp_security,
+    @username,
+    @password,
+    @mailbox,
+    @fetch_interval_seconds,
+    @flow_id,
+    @auth_type,
+    @oauth_provider,
+    @oauth_client_id,
+    @oauth_client_secret,
+    @user_id,
+    @user_id
 )
 RETURNING *`
 
-	return s.writeReturning(
-		ctx,
-		query,
-		domainID,
-		profile.Name,
-		profile.Description,
-		profile.Enabled,
-		profile.EmailAddress,
-		profile.SenderName,
-		profile.ReplyTo,
-		profile.Signature,
-		profile.IMAPHost,
-		profile.IMAPPort,
-		profile.IMAPSecurity,
-		profile.SMTPHost,
-		profile.SMTPPort,
-		profile.SMTPSecurity,
-		profile.Username,
-		password,
-		mailbox,
-		fetchInterval,
-		nullableInt64(profile.FlowID),
-		authType,
-		nullIfEmpty(string(profile.OAuthProvider)),
-		nullIfEmpty(profile.OAuthClientID),
-		oauthClientSecret,
-		nullIfZero(userID),
-		nullIfZero(userID),
-	)
+	args := emailProfileWriteArgs(params.Profile)
+	args["domain_id"] = params.DomainID
+	args["password"] = params.Password
+	args["oauth_client_secret"] = params.OAuthClientSecret
+	args["user_id"] = nullIfZero(params.UserID)
+
+	return s.writeReturning(ctx, query, args)
 }
 
-func (s *emailProfileStore) Update(
-	ctx context.Context,
-	domainID, userID, id int64,
-	profile *model.EmailProfile,
-	password, oauthClientSecret []byte,
-) (*model.EmailProfile, error) {
-	mailbox, fetchInterval, authType := emailProfileDefaults(profile)
-
+func (s *emailProfileStore) Update(ctx context.Context, params store.UpdateEmailProfileParams) (*model.EmailProfile, error) {
+	// A nil secret keeps the stored one only while the auth settings it belongs to stay.
 	const query = `
 UPDATE email.profile SET
-    name = $1,
-    description = $2,
-    enabled = $3,
-    email_address = $4,
-    sender_name = $5,
-    reply_to = $6,
-    signature = $7,
-    imap_host = $8,
-    imap_port = $9,
-    imap_security = $10,
-    smtp_host = $11,
-    smtp_port = $12,
-    smtp_security = $13,
-    username = $14,
-    password = CASE WHEN $19 = 'basic' THEN COALESCE($15, password) ELSE NULL END,
-    mailbox = $16,
-    fetch_interval_seconds = $17,
-    flow_id = $18,
-    auth_type = $19,
-    oauth_provider = $20,
-    oauth_client_id = $21,
+    name = @name,
+    description = @description,
+    enabled = @enabled,
+    email_address = @email_address,
+    sender_name = @sender_name,
+    reply_to = @reply_to,
+    signature = @signature,
+    imap_host = @imap_host,
+    imap_port = @imap_port,
+    imap_security = @imap_security,
+    smtp_host = @smtp_host,
+    smtp_port = @smtp_port,
+    smtp_security = @smtp_security,
+    username = @username,
+    password = CASE WHEN @auth_type = 'basic' THEN COALESCE(@password, password) ELSE NULL END,
+    mailbox = @mailbox,
+    fetch_interval_seconds = @fetch_interval_seconds,
+    flow_id = @flow_id,
+    auth_type = @auth_type,
+    oauth_provider = @oauth_provider,
+    oauth_client_id = @oauth_client_id,
     oauth_client_secret = CASE
-        WHEN $19 <> 'oauth2' THEN NULL
-        WHEN oauth_provider IS NOT DISTINCT FROM $20
-            AND oauth_client_id IS NOT DISTINCT FROM $21
-            THEN COALESCE($22, oauth_client_secret)
-        ELSE $22
+        WHEN @auth_type <> 'oauth2' THEN NULL
+        WHEN oauth_provider IS NOT DISTINCT FROM @oauth_provider
+            AND oauth_client_id IS NOT DISTINCT FROM @oauth_client_id
+            THEN COALESCE(@oauth_client_secret, oauth_client_secret)
+        ELSE @oauth_client_secret
     END,
     oauth_refresh_token = CASE
-        WHEN $19 = 'oauth2'
-            AND oauth_provider IS NOT DISTINCT FROM $20
-            AND oauth_client_id IS NOT DISTINCT FROM $21
+        WHEN @auth_type = 'oauth2'
+            AND oauth_provider IS NOT DISTINCT FROM @oauth_provider
+            AND oauth_client_id IS NOT DISTINCT FROM @oauth_client_id
             THEN oauth_refresh_token
         ELSE NULL
     END,
     updated_at = now(),
-    updated_by = $23
-WHERE domain_id = $24 AND id = $25
+    updated_by = @user_id
+WHERE domain_id = @domain_id AND id = @id
 RETURNING *`
 
-	return s.writeReturning(
-		ctx,
-		query,
-		profile.Name,
-		profile.Description,
-		profile.Enabled,
-		profile.EmailAddress,
-		profile.SenderName,
-		profile.ReplyTo,
-		profile.Signature,
-		profile.IMAPHost,
-		profile.IMAPPort,
-		profile.IMAPSecurity,
-		profile.SMTPHost,
-		profile.SMTPPort,
-		profile.SMTPSecurity,
-		profile.Username,
-		password,
-		mailbox,
-		fetchInterval,
-		nullableInt64(profile.FlowID),
-		authType,
-		nullIfEmpty(string(profile.OAuthProvider)),
-		nullIfEmpty(profile.OAuthClientID),
-		oauthClientSecret,
-		nullIfZero(userID),
-		domainID,
-		id,
-	)
+	args := emailProfileWriteArgs(params.Profile)
+	args["domain_id"] = params.DomainID
+	args["id"] = params.ID
+	args["password"] = params.Password
+	args["oauth_client_secret"] = params.OAuthClientSecret
+	args["user_id"] = nullIfZero(params.UserID)
+
+	return s.writeReturning(ctx, query, args)
+}
+
+// emailProfileWriteArgs names the writable settings shared by Create and Update.
+func emailProfileWriteArgs(profile *model.EmailProfile) pgx.NamedArgs {
+	return pgx.NamedArgs{
+		"name":                   profile.Name,
+		"description":            profile.Description,
+		"enabled":                profile.Enabled,
+		"email_address":          profile.EmailAddress,
+		"sender_name":            profile.SenderName,
+		"reply_to":               profile.ReplyTo,
+		"signature":              profile.Signature,
+		"imap_host":              profile.IMAPHost,
+		"imap_port":              profile.IMAPPort,
+		"imap_security":          profile.IMAPSecurity,
+		"smtp_host":              profile.SMTPHost,
+		"smtp_port":              profile.SMTPPort,
+		"smtp_security":          profile.SMTPSecurity,
+		"username":               profile.Username,
+		"mailbox":                profile.Mailbox,
+		"fetch_interval_seconds": profile.FetchIntervalSeconds,
+		"flow_id":                nullableInt64(profile.FlowID),
+		"auth_type":              profile.AuthType,
+		"oauth_provider":         nullIfEmpty(string(profile.OAuthProvider)),
+		"oauth_client_id":        nullIfEmpty(profile.OAuthClientID),
+	}
 }
 
 func (s *emailProfileStore) GetPassword(ctx context.Context, domainID, id int64) ([]byte, error) {
 	const query = `SELECT password FROM email.profile WHERE domain_id = $1 AND id = $2`
 
 	var password []byte
-	if err := s.db.QueryRowContext(ctx, query, domainID, id).Scan(&password); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRow(ctx, query, domainID, id).Scan(&password); err != nil {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, kiterrors.NotFound(
 				"email profile does not exist or access is denied",
 				kiterrors.WithID("store.email_profile.not_found"),
@@ -366,11 +389,11 @@ FROM email.profile
 WHERE domain_id = $1 AND id = $2`
 
 	credentials := new(store.EmailProfileOAuthCredentials)
-	if err := s.db.QueryRowContext(ctx, query, domainID, id).Scan(
+	if err := s.db.QueryRow(ctx, query, domainID, id).Scan(
 		&credentials.ClientSecret,
 		&credentials.RefreshToken,
 	); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, kiterrors.NotFound(
 				"email profile does not exist or access is denied",
 				kiterrors.WithID("store.email_profile.not_found"),
@@ -398,8 +421,8 @@ WHERE domain_id = $2 AND id = $3
 RETURNING id`
 
 	var updatedID int64
-	if err := s.db.QueryRowContext(ctx, query, refreshToken, domainID, id).Scan(&updatedID); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+	if err := s.db.QueryRow(ctx, query, refreshToken, domainID, id).Scan(&updatedID); err != nil {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return kiterrors.NotFound(
 				"email profile does not exist or access is denied",
 				kiterrors.WithID("store.email_profile.not_found"),
@@ -413,7 +436,12 @@ RETURNING id`
 	return nil
 }
 
-func (s *emailProfileStore) SetOAuthRefreshTokenAndState(ctx context.Context, domainID, id int64, refreshToken []byte, state model.EmailConnectionState) error {
+func (s *emailProfileStore) SetOAuthRefreshTokenAndState(
+	ctx context.Context,
+	domainID, id int64,
+	refreshToken []byte,
+	state model.EmailConnectionState,
+) (*model.EmailProfile, error) {
 	// updated_at also invalidates any IMAP session cached against the old token version,
 	// so a revoked (Disconnect) or replaced authorization stops an already-open session.
 	const query = `
@@ -423,24 +451,9 @@ UPDATE email.profile SET
     connection_error = NULL,
     updated_at = now()
 WHERE domain_id = $3 AND id = $4
-RETURNING id`
+RETURNING *`
 
-	var updatedID int64
-	if err := s.db.QueryRowContext(
-		ctx, query, refreshToken, state, domainID, id,
-	).Scan(&updatedID); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
-			return kiterrors.NotFound(
-				"email profile does not exist or access is denied",
-				kiterrors.WithID("store.email_profile.not_found"),
-				kiterrors.WithCause(err),
-			)
-		}
-
-		return err
-	}
-
-	return nil
+	return s.writeReturning(ctx, query, refreshToken, state, domainID, id)
 }
 
 func (s *emailProfileStore) SetConnectionResult(ctx context.Context, domainID, id int64, state model.EmailConnectionState, connectionError string, successful bool) error {
@@ -456,7 +469,7 @@ WHERE domain_id = $4 AND id = $5
 RETURNING id`
 
 	var updatedID int64
-	if err := s.db.QueryRowContext(
+	if err := s.db.QueryRow(
 		ctx,
 		query,
 		state,
@@ -465,7 +478,7 @@ RETURNING id`
 		domainID,
 		id,
 	).Scan(&updatedID); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return kiterrors.NotFound(
 				"email profile does not exist or access is denied",
 				kiterrors.WithID("store.email_profile.not_found"),
@@ -505,26 +518,7 @@ func (s *emailProfileStore) writeReturning(ctx context.Context, query string, ar
 	readBackQuery := "WITH p AS (" + query + ") SELECT " + emailProfileColumns +
 		" FROM p" + emailProfileJoins
 
-	return scanEmailProfile(s.db.QueryRowContext(ctx, readBackQuery, args...))
-}
-
-func emailProfileDefaults(profile *model.EmailProfile) (string, int32, model.EmailAuthType) {
-	mailbox := profile.Mailbox
-	if mailbox == "" {
-		mailbox = "INBOX"
-	}
-
-	fetchInterval := profile.FetchIntervalSeconds
-	if fetchInterval == 0 {
-		fetchInterval = 5
-	}
-
-	authType := profile.AuthType
-	if authType == "" {
-		authType = model.EmailAuthTypeBasic
-	}
-
-	return mailbox, fetchInterval, authType
+	return collectEmailProfile(s.db.Query(ctx, readBackQuery, args...))
 }
 
 func nullableInt64(value *int64) any {
@@ -535,6 +529,8 @@ func nullableInt64(value *int64) any {
 	return *value
 }
 
+// nullIfEmpty stores an absent optional text as NULL instead of an empty string,
+// so partial indexes and checks see it as missing.
 func nullIfEmpty(value string) any {
 	if value == "" {
 		return nil
@@ -615,43 +611,15 @@ func emailProfileOrderBy(sort string) string {
 	return strings.Join(orderBy, ", ")
 }
 
-func scanEmailProfile(row rowScanner) (*model.EmailProfile, error) {
-	record := new(emailProfileRecord)
-	if err := row.Scan(
-		&record.ID,
-		&record.DomainID,
-		&record.Name,
-		&record.Description,
-		&record.Enabled,
-		&record.EmailAddress,
-		&record.SenderName,
-		&record.ReplyTo,
-		&record.Signature,
-		&record.IMAPHost,
-		&record.IMAPPort,
-		&record.IMAPSecurity,
-		&record.SMTPHost,
-		&record.SMTPPort,
-		&record.SMTPSecurity,
-		&record.Username,
-		&record.Mailbox,
-		&record.FetchIntervalSeconds,
-		&record.FlowID,
-		&record.AuthType,
-		&record.OAuthProvider,
-		&record.OAuthClientID,
-		&record.OAuthConnected,
-		&record.ConnectionState,
-		&record.LastSuccessfulConnectionAt,
-		&record.ConnectionError,
-		&record.CreatedAt,
-		&record.CreatedByID,
-		&record.CreatedByName,
-		&record.UpdatedAt,
-		&record.UpdatedByID,
-		&record.UpdatedByName,
-	); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+// collectEmailProfile reads the one profile a query returns; none is a not-found error.
+func collectEmailProfile(rows pgx.Rows, err error) (*model.EmailProfile, error) {
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByNameLax[emailProfileRecord])
+	if err != nil {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, kiterrors.NotFound(
 				"email profile does not exist or access is denied",
 				kiterrors.WithID("store.email_profile.not_found"),

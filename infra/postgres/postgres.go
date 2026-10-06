@@ -2,28 +2,50 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	otelpgx "github.com/webitel/webitel-go-kit/infra/otel/instrumentation/pgx"
 	"go.uber.org/fx"
 
 	"github.com/webitel/webitel-emails/config"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func New(cfg *config.Config, log *slog.Logger, lifecycle fx.Lifecycle) (*sql.DB, error) {
-	db, err := sql.Open("pgx", cfg.Postgres.DSN)
+func New(cfg *config.Config, log *slog.Logger, lifecycle fx.Lifecycle) (*pgxpool.Pool, error) {
+	poolConfig, err := pgxpool.ParseConfig(cfg.Postgres.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: open: %w", err)
+		return nil, fmt.Errorf("postgres: parse config: %w", err)
 	}
-	cfg.Postgres.ApplyToSQLDB(db)
+	if cfg.Postgres.MaxOpenConns > math.MaxInt32 {
+		return nil, fmt.Errorf("postgres: max open connections exceeds %d", math.MaxInt32)
+	}
+	if cfg.Postgres.MaxOpenConns > 0 {
+		poolConfig.MaxConns = int32(cfg.Postgres.MaxOpenConns)
+	}
+	if cfg.Postgres.ConnMaxIdleTime > 0 {
+		poolConfig.MaxConnIdleTime = cfg.Postgres.ConnMaxIdleTime
+	}
+	if cfg.Postgres.ConnMaxLifetime > 0 {
+		poolConfig.MaxConnLifetime = cfg.Postgres.ConnMaxLifetime
+	}
+	if cfg.Postgres.MaxIdleConns > 0 {
+		log.Warn("postgres.max_idle_conns is not supported by pgxpool; use conn_max_idle_time")
+	}
+	if cfg.Log.Otel {
+		poolConfig.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithTrimSQLInSpanName())
+	}
+
+	db, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: create pool: %w", err)
+	}
 
 	lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			if err := db.PingContext(ctx); err != nil {
-				_ = db.Close()
+			if err := db.Ping(ctx); err != nil {
+				db.Close()
 				return fmt.Errorf("postgres: ping: %w", err)
 			}
 			log.Info("postgres connection established")
@@ -31,9 +53,7 @@ func New(cfg *config.Config, log *slog.Logger, lifecycle fx.Lifecycle) (*sql.DB,
 			return nil
 		},
 		OnStop: func(context.Context) error {
-			if err := db.Close(); err != nil {
-				return fmt.Errorf("postgres: close: %w", err)
-			}
+			db.Close()
 			log.Info("postgres connection closed")
 
 			return nil

@@ -4,7 +4,6 @@ package integration_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/webitel/webitel-go-kit/infra/pubsub/rabbitmq"
 
@@ -133,7 +133,7 @@ func (s *flakyStore) MarkFailed(ctx context.Context, owner string, id uuid.UUID,
 
 // insertOutboxEvents adds rows in one statement, so the relay claims them
 // together and in the given order.
-func insertOutboxEvents(t *testing.T, db *sql.DB, payloads ...string) []uuid.UUID {
+func insertOutboxEvents(t *testing.T, db *pgxpool.Pool, payloads ...string) []uuid.UUID {
 	t.Helper()
 
 	ids := make([]string, len(payloads))
@@ -143,23 +143,23 @@ func insertOutboxEvents(t *testing.T, db *sql.DB, payloads ...string) []uuid.UUI
 		ids[i] = result[i].String()
 	}
 
-	if _, err := db.ExecContext(context.Background(), `
+	if _, err := db.Exec(context.Background(), `
 INSERT INTO email.outbox (event_id, domain_id, event_type, schema_version, exchange, routing_key, payload, created_at)
 SELECT e.id::uuid, 1, 'email.message.inbound', 1, 'email.events', 'email.message.inbound.v1', e.payload::json,
     now() + e.position * interval '1 millisecond'
 FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS e(id, payload, position)`,
-		pqArray(&ids), pqArray(&payloads)); err != nil {
+		ids, payloads); err != nil {
 		t.Fatalf("insert outbox events: %v", err)
 	}
 
 	return result
 }
 
-func insertOutboxEvent(t *testing.T, db *sql.DB, payload string) uuid.UUID {
+func insertOutboxEvent(t *testing.T, db *pgxpool.Pool, payload string) uuid.UUID {
 	t.Helper()
 
 	id := uuid.Must(uuid.NewV7())
-	if _, err := db.ExecContext(context.Background(), `
+	if _, err := db.Exec(context.Background(), `
 INSERT INTO email.outbox (event_id, domain_id, event_type, schema_version, exchange, routing_key, payload)
 VALUES ($1, 1, 'email.message.inbound', 1, 'email.events', 'email.message.inbound.v1', $2)`,
 		id.String(), payload); err != nil {
@@ -251,7 +251,7 @@ WHERE event_id = $1 AND state = 'failed' AND attempts = 1 AND last_error LIKE 'p
 	})
 
 	t.Run("an expired lease of another relay is taken over", func(t *testing.T) {
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 UPDATE email.outbox SET state = 'processing', published_at = NULL,
     locked_by = 'gone', locked_until = now() - interval '1 second'
 WHERE event_id = $1`, first.String()); err != nil {
@@ -284,7 +284,7 @@ WHERE event_id = $1`, first.String()); err != nil {
 
 			eventually(t, "every event is published", func() bool {
 				return count(t, db, `SELECT count(*) FROM email.outbox WHERE event_id = ANY($1::uuid[]) AND state = 'published'`,
-					pqArray(uuidStrings(ids))) == 3
+					uuidStrings(ids)) == 3
 			})
 			// Only the event whose mark was missed goes out twice.
 			if times := broker.publishedTimes(ids); times != 4 {
@@ -301,7 +301,7 @@ WHERE event_id = $1`, first.String()); err != nil {
 			eventually(t, "the oversized row fails and the rest are published", func() bool {
 				return count(t, db, `SELECT count(*) FROM email.outbox WHERE event_id = $1 AND state = 'failed'`, ids[0].String()) == 1 &&
 					count(t, db, `SELECT count(*) FROM email.outbox WHERE event_id = ANY($1::uuid[]) AND state = 'published'`,
-						pqArray(uuidStrings(ids[1:]))) == 2
+						uuidStrings(ids[1:])) == 2
 			})
 			if times := broker.publishedTimes(ids[1:]); times != 2 {
 				t.Fatalf("events published %d times, want once each", times)
@@ -310,11 +310,11 @@ WHERE event_id = $1`, first.String()); err != nil {
 	}
 }
 
-func uuidStrings(ids []uuid.UUID) *[]string {
+func uuidStrings(ids []uuid.UUID) []string {
 	result := make([]string, 0, len(ids))
 	for _, id := range ids {
 		result = append(result, id.String())
 	}
 
-	return &result
+	return result
 }

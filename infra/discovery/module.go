@@ -1,17 +1,15 @@
 // Package servicediscovery registers the service in Consul and elects its leader.
 package servicediscovery
 
-import (
-	kitdiscovery "github.com/webitel/webitel-go-kit/infra/discovery"
-	"go.uber.org/fx"
-)
+import "go.uber.org/fx"
 
 var Module = fx.Module(
 	"service_discovery",
 	fx.Provide(
 		NewInstanceID,
-		New,
+		NewProvider,
 		NewLeaderElector,
+		Register,
 	),
-	fx.Invoke(func(kitdiscovery.DiscoveryProvider) {}),
+	fx.Invoke(func(Registration) {}),
 )

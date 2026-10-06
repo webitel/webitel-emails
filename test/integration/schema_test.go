@@ -27,7 +27,7 @@ func TestSchemaProtectsTenantsAndHistory(t *testing.T) {
 	completed := time.Now().UTC()
 
 	insertMessage := func(domainID, threadID, profileID int64, messageID string) error {
-		_, err := db.ExecContext(context.Background(), `
+		_, err := db.Exec(context.Background(), `
 INSERT INTO email.message (domain_id, thread_id, profile_id, direction, message_id, received_at)
 VALUES ($1, $2, $3, 'inbound', $4, now())`, domainID, threadID, profileID, messageID)
 
@@ -47,27 +47,27 @@ VALUES ($1, $2, $3, 'inbound', $4, now())`, domainID, threadID, profileID, messa
 	})
 
 	t.Run("a service thread is always closed", func(t *testing.T) {
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status) VALUES (1, $1, 'unknown', 'new')`, owner); err == nil {
 			t.Fatal("an invalid thread kind was accepted")
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status) VALUES (1, $1, 'service', 'new')`, owner); err == nil {
 			t.Fatal("an open service thread was accepted")
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status, completed_at, contact_resolution_state)
 VALUES (1, $1, 'service', 'processed', $2, 'not_applicable')`, owner, completed); err != nil {
 			t.Fatalf("a closed service thread must be accepted: %v", err)
 		}
 
 		// The resolution state and the kind must agree in both directions.
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status, completed_at)
 VALUES (1, $1, 'service', 'processed', $2)`, owner, completed); err == nil {
 			t.Fatal("a service thread awaiting contact resolution was accepted")
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.thread (domain_id, profile_id, kind, status, contact_resolution_state)
 VALUES (1, $1, 'regular', 'new', 'not_applicable')`, owner); err == nil {
 			t.Fatal("a regular thread excluded from contact resolution was accepted")
@@ -90,7 +90,7 @@ VALUES (1, $1, 'regular', 'new', 'not_applicable')`, owner); err == nil {
 		}
 		for _, index := range indexes {
 			var exists bool
-			if err := db.QueryRowContext(context.Background(),
+			if err := db.QueryRow(context.Background(),
 				`SELECT to_regclass($1) IS NOT NULL`, index).Scan(&exists); err != nil {
 				t.Fatalf("look up index %s: %v", index, err)
 			}
@@ -105,17 +105,17 @@ VALUES (1, $1, 'regular', 'new', 'not_applicable')`, owner); err == nil {
 			t.Fatal(err)
 		}
 		var messageID int64
-		if err := db.QueryRowContext(context.Background(),
+		if err := db.QueryRow(context.Background(),
 			`SELECT id FROM email.message WHERE message_id = '<cascade@x>'`).Scan(&messageID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.recipient (domain_id, message_id, type, address, normalized_address, ordinal)
 VALUES (1, $1, 'to', 'A@X.com', 'a@x.com', 0)`, messageID); err != nil {
 			t.Fatal(err)
 		}
 
-		if _, err := db.ExecContext(context.Background(), `DELETE FROM email.thread WHERE id = $1`, thread); err != nil {
+		if _, err := db.Exec(context.Background(), `DELETE FROM email.thread WHERE id = $1`, thread); err != nil {
 			t.Fatal(err)
 		}
 		if count(t, db, `SELECT count(*) FROM email.message`) != 0 ||
@@ -127,16 +127,16 @@ VALUES (1, $1, 'to', 'A@X.com', 'a@x.com', 0)`, messageID); err != nil {
 	t.Run("a profile with history cannot be deleted, one with only quarantine can", func(t *testing.T) {
 		kept := seedThread(t, db, 1, owner, "regular", "new", nil)
 		_ = kept
-		if _, err := db.ExecContext(context.Background(), `DELETE FROM email.profile WHERE id = $1`, owner); err == nil {
+		if _, err := db.Exec(context.Background(), `DELETE FROM email.profile WHERE id = $1`, owner); err == nil {
 			t.Fatal("a profile holding conversation history was deleted")
 		}
 
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.inbound_failure (domain_id, profile_id, mailbox, uid_validity, uid, category, reason)
 VALUES (1, $1, 'INBOX', 10, 5, 'mime_parse', 'failed to parse MIME message')`, neighbour); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(context.Background(), `DELETE FROM email.profile WHERE id = $1`, neighbour); err != nil {
+		if _, err := db.Exec(context.Background(), `DELETE FROM email.profile WHERE id = $1`, neighbour); err != nil {
 			t.Fatalf("quarantine rows must not hold a profile: %v", err)
 		}
 		if count(t, db, `SELECT count(*) FROM email.inbound_failure`) != 0 {
@@ -155,7 +155,7 @@ func TestAttachmentManifestConstraints(t *testing.T) {
 	thread := seedThread(t, db, 1, profileID, "regular", "new", nil)
 
 	var messageID int64
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 INSERT INTO email.message (domain_id, thread_id, profile_id, direction, message_id, received_at)
 VALUES (1, $1, $2, 'inbound', '<manifest@x>', now()) RETURNING id`, thread, profileID).Scan(&messageID); err != nil {
 		t.Fatalf("seed message: %v", err)
@@ -165,7 +165,7 @@ VALUES (1, $1, $2, 'inbound', '<manifest@x>', now()) RETURNING id`, thread, prof
 		query := fmt.Sprintf(`
 INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position%s)
 VALUES ($1, $2, 'attachment', 'a.pdf', 'application/pdf', 1, $3%s)`, columns, values)
-		_, err := db.ExecContext(context.Background(), query, domainID, messageID, nextPosition())
+		_, err := db.Exec(context.Background(), query, domainID, messageID, nextPosition())
 
 		return err
 	}
@@ -213,12 +213,12 @@ VALUES ($1, $2, 'attachment', 'a.pdf', 'application/pdf', 1, $3%s)`, columns, va
 	})
 
 	t.Run("one position holds one part", func(t *testing.T) {
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position)
 VALUES (1, $1, 'attachment', 'first.pdf', 'application/pdf', 1, 100)`, messageID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(context.Background(), `
+		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.message_attachment (domain_id, message_id, disposition, file_name, mime_type, size, position)
 VALUES (1, $1, 'attachment', 'second.pdf', 'application/pdf', 1, 100)`, messageID); err == nil {
 			t.Fatal("two parts share one position")
@@ -226,7 +226,7 @@ VALUES (1, $1, 'attachment', 'second.pdf', 'application/pdf', 1, 100)`, messageI
 	})
 
 	t.Run("a negative attachment attempt count is refused", func(t *testing.T) {
-		if _, err := db.ExecContext(context.Background(),
+		if _, err := db.Exec(context.Background(),
 			`UPDATE email.message SET attachment_attempts = -1 WHERE id = $1`, messageID); err == nil {
 			t.Fatal("a negative attempt count was accepted")
 		}
@@ -236,7 +236,7 @@ VALUES (1, $1, 'attachment', 'second.pdf', 'application/pdf', 1, 100)`, messageI
 		if count(t, db, `SELECT count(*) FROM email.message_attachment`) == 0 {
 			t.Fatal("no manifest rows to delete")
 		}
-		if _, err := db.ExecContext(context.Background(),
+		if _, err := db.Exec(context.Background(),
 			`DELETE FROM email.message WHERE id = $1`, messageID); err != nil {
 			t.Fatal(err)
 		}

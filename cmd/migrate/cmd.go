@@ -3,8 +3,11 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/fx"
 
@@ -39,17 +42,7 @@ func CMD() *cli.Command {
 
 func run(ctx context.Context, cfg *config.Config) error {
 	app := fx.New(
-		fx.Supply(cfg),
-		logging.Module,
-		postgres.Module,
-		fx.Provide(NewMigrator),
-		fx.Invoke(func(lifecycle fx.Lifecycle, migrator *Migrator) {
-			lifecycle.Append(fx.Hook{
-				OnStart: func(ctx context.Context) error {
-					return migrator.Run(ctx)
-				},
-			})
-		}),
+		modules(cfg),
 		fx.NopLogger,
 	)
 
@@ -58,4 +51,28 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	return app.Stop(ctx)
+}
+
+func modules(cfg *config.Config) fx.Option {
+	return fx.Options(
+		fx.Supply(cfg),
+		logging.Module,
+		postgres.Module,
+		fx.Provide(newMigrationDB, NewMigrator),
+		fx.Invoke(func(lifecycle fx.Lifecycle, migrator *Migrator) {
+			lifecycle.Append(fx.Hook{
+				OnStart: func(ctx context.Context) error {
+					return migrator.Run(ctx)
+				},
+			})
+		}),
+	)
+}
+
+// newMigrationDB adapts the pgx pool for Goose, which requires database/sql.
+func newMigrationDB(pool *pgxpool.Pool, lifecycle fx.Lifecycle) *sql.DB {
+	db := stdlib.OpenDBFromPool(pool)
+	lifecycle.Append(fx.StopHook(db.Close))
+
+	return db
 }

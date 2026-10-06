@@ -6,7 +6,7 @@ import (
 	stderrors "errors"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
@@ -66,7 +66,7 @@ func (s *emailMessageStore) Get(ctx context.Context, domainID, messageID int64) 
 FROM email.message m
 WHERE m.domain_id = $1 AND m.id = $2`
 
-	message, err := scanEmailMessage(s.db.QueryRowContext(ctx, query, domainID, messageID))
+	message, err := scanEmailMessage(s.db.QueryRow(ctx, query, domainID, messageID))
 	if err != nil {
 		return nil, ParseError(err)
 	}
@@ -79,14 +79,10 @@ func (s *emailMessageStore) LocateByMessageID(
 	domainID, profileID int64,
 	messageID string,
 ) (*store.EmailMessageIdentity, error) {
-	if messageID == "" {
-		return nil, nil
-	}
-
 	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2 AND m.message_id = $3`
 
-	return locateEmailMessageIdentity(s.db.QueryRowContext(ctx, query, domainID, profileID, messageID))
+	return locateEmailMessageIdentity(s.db.QueryRow(ctx, query, domainID, profileID, messageID))
 }
 
 func (s *emailMessageStore) LocateByIMAPIdentity(
@@ -94,15 +90,11 @@ func (s *emailMessageStore) LocateByIMAPIdentity(
 	domainID, profileID int64,
 	identity model.EmailIMAPIdentity,
 ) (*store.EmailMessageIdentity, error) {
-	if identity.Mailbox == "" {
-		return nil, nil
-	}
-
 	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2
   AND m.mailbox = $3 AND m.uid_validity = $4 AND m.uid = $5`
 
-	return locateEmailMessageIdentity(s.db.QueryRowContext(
+	return locateEmailMessageIdentity(s.db.QueryRow(
 		ctx, query, domainID, profileID, identity.Mailbox, int64(identity.UIDValidity), int64(identity.UID),
 	))
 }
@@ -112,16 +104,12 @@ func (s *emailMessageStore) LocateByRawChecksum(
 	domainID, profileID int64,
 	checksum []byte,
 ) (*store.EmailMessageIdentity, error) {
-	if len(checksum) == 0 {
-		return nil, nil
-	}
-
 	// Only emails whose identifier had to be generated are deduplicated this way.
 	const query = `SELECT ` + emailMessageIdentityColumns + identityFromMessage + `
 WHERE m.domain_id = $1 AND m.profile_id = $2
   AND m.raw_sha256 = $3 AND m.message_id_generated`
 
-	return locateEmailMessageIdentity(s.db.QueryRowContext(ctx, query, domainID, profileID, checksum))
+	return locateEmailMessageIdentity(s.db.QueryRow(ctx, query, domainID, profileID, checksum))
 }
 
 // MarkReady completes a message only while no part of its manifest is pending.
@@ -151,7 +139,7 @@ SELECT COALESCE(
 )`
 
 	var state sql.NullString
-	if err := s.db.QueryRowContext(ctx, query, domainID, messageID).Scan(&state); err != nil {
+	if err := s.db.QueryRow(ctx, query, domainID, messageID).Scan(&state); err != nil {
 		return "", ParseError(err)
 	}
 
@@ -165,17 +153,12 @@ UPDATE email.message SET
     updated_at = now()
 WHERE domain_id = $1 AND id = $2 AND state = 'processing'`
 
-	result, err := s.db.ExecContext(ctx, query, domainID, messageID)
+	result, err := s.db.Exec(ctx, query, domainID, messageID)
 	if err != nil {
 		return false, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return affected > 0, nil
+	return result.RowsAffected() > 0, nil
 }
 
 func (s *emailMessageStore) IncrementAttachmentAttempts(
@@ -190,7 +173,7 @@ WHERE domain_id = $1 AND id = $2 AND state = 'processing'
 RETURNING attachment_attempts`
 
 	var attempts int32
-	if err := s.db.QueryRowContext(ctx, query, domainID, messageID).Scan(&attempts); err != nil {
+	if err := s.db.QueryRow(ctx, query, domainID, messageID).Scan(&attempts); err != nil {
 		return 0, ParseError(err)
 	}
 
@@ -204,7 +187,7 @@ FROM email.message m
 WHERE m.domain_id = $1 AND m.profile_id = $2 AND m.state = 'ready'`
 
 	var received sql.NullTime
-	if err := s.db.QueryRowContext(ctx, query, domainID, profileID).Scan(&received); err != nil {
+	if err := s.db.QueryRow(ctx, query, domainID, profileID).Scan(&received); err != nil {
 		return time.Time{}, ParseError(err)
 	}
 
@@ -223,13 +206,13 @@ INSERT INTO email.message AS m (
     sent_at, received_at
 )
 VALUES (
-    $1, $2, $3,
-    $4, $5, $6,
-    $7, $8, $9,
-    $10, $11, $12,
-    $13, $14, $15, $16, $17,
-    $18, $19, $20, $21,
-    $22, $23
+    @domain_id, @thread_id, @profile_id,
+    @direction, @kind, @state,
+    @message_id, @message_id_generated, @raw_sha256,
+    @mailbox, @uid_validity, @uid,
+    @in_reply_to, @message_references, @subject, @body_text, @body_html,
+    @bounce_original_message_id, @bounce_recipient, @bounce_status, @bounce_diagnostic_code,
+    @sent_at, @received_at
 )
 RETURNING ` + emailMessageColumns
 
@@ -255,33 +238,31 @@ RETURNING ` + emailMessageColumns
 		references = []string{}
 	}
 
-	created, err := scanEmailMessage(s.db.QueryRowContext(
-		ctx,
-		query,
-		message.DomainID,
-		message.ThreadID,
-		message.ProfileID,
-		message.Direction,
-		message.Kind,
-		message.State,
-		message.MessageID,
-		message.MessageIDGenerated,
-		message.RawSHA256,
-		mailbox,
-		uidValidity,
-		uid,
-		nullableText(message.InReplyTo),
-		pq.Array(references),
-		message.Subject,
-		message.TextBody,
-		message.HTMLBody,
-		nullableText(bounce.OriginalMessageID),
-		nullableText(bounce.Recipient),
-		nullableText(bounce.Status),
-		nullableText(bounce.DiagnosticCode),
-		message.SentAt,
-		message.ReceivedAt,
-	))
+	created, err := scanEmailMessage(s.db.QueryRow(ctx, query, pgx.NamedArgs{
+		"domain_id":                  message.DomainID,
+		"thread_id":                  message.ThreadID,
+		"profile_id":                 message.ProfileID,
+		"direction":                  message.Direction,
+		"kind":                       message.Kind,
+		"state":                      message.State,
+		"message_id":                 message.MessageID,
+		"message_id_generated":       message.MessageIDGenerated,
+		"raw_sha256":                 message.RawSHA256,
+		"mailbox":                    mailbox,
+		"uid_validity":               uidValidity,
+		"uid":                        uid,
+		"in_reply_to":                nullIfEmpty(message.InReplyTo),
+		"message_references":         references,
+		"subject":                    message.Subject,
+		"body_text":                  message.TextBody,
+		"body_html":                  message.HTMLBody,
+		"bounce_original_message_id": nullIfEmpty(bounce.OriginalMessageID),
+		"bounce_recipient":           nullIfEmpty(bounce.Recipient),
+		"bounce_status":              nullIfEmpty(bounce.Status),
+		"bounce_diagnostic_code":     nullIfEmpty(bounce.DiagnosticCode),
+		"sent_at":                    message.SentAt,
+		"received_at":                message.ReceivedAt,
+	}))
 	if err != nil {
 		if isConstraintViolation(err, uniqueViolation,
 			"message_identity_uidx", "message_imap_identity_uidx", "message_raw_checksum_uidx") {
@@ -294,16 +275,6 @@ RETURNING ` + emailMessageColumns
 	return created, nil
 }
 
-// nullableText keeps an absent optional header NULL instead of an empty string,
-// so partial indexes and checks see it as missing.
-func nullableText(value string) any {
-	if value == "" {
-		return nil
-	}
-
-	return value
-}
-
 func locateEmailMessageIdentity(row rowScanner) (*store.EmailMessageIdentity, error) {
 	var (
 		identity   store.EmailMessageIdentity
@@ -312,7 +283,7 @@ func locateEmailMessageIdentity(row rowScanner) (*store.EmailMessageIdentity, er
 		resolution string
 	)
 	if err := row.Scan(&identity.ID, &identity.ThreadID, &state, &threadKind, &resolution); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 
@@ -357,7 +328,7 @@ func scanEmailMessage(row rowScanner) (*model.EmailMessage, error) {
 		&uidValidity,
 		&uid,
 		&inReplyTo,
-		pq.Array(&message.References),
+		&message.References,
 		&message.Subject,
 		&message.TextBody,
 		&message.HTMLBody,

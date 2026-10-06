@@ -17,8 +17,6 @@ import (
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
-const minFetchIntervalSeconds int32 = 5
-
 // EmailProfileService coordinates Email Profile CRUD operations.
 type EmailProfileService struct {
 	store     store.EmailProfileStore
@@ -58,69 +56,86 @@ func (s *EmailProfileService) Locate(ctx context.Context, domainID, id int64) (*
 	return s.store.Locate(ctx, domainID, id)
 }
 
+// CreateEmailProfileInput is a new profile with its plaintext write-only secrets.
+type CreateEmailProfileInput struct {
+	DomainID          int64
+	UserID            int64
+	Profile           *model.EmailProfile
+	Password          string
+	OAuthClientSecret string
+}
+
+// UpdateEmailProfileInput replaces writable settings of profile ID; an empty
+// secret keeps the stored one unless the auth settings require a new one.
+type UpdateEmailProfileInput struct {
+	DomainID          int64
+	UserID            int64
+	ID                int64
+	Profile           *model.EmailProfile
+	Password          string
+	OAuthClientSecret string
+}
+
 // Create stores an Email Profile within a domain.
-func (s *EmailProfileService) Create(
-	ctx context.Context,
-	domainID, userID int64,
-	profile *model.EmailProfile,
-	password string,
-	oauthClientSecret string,
-) (*model.EmailProfile, error) {
-	if err := validateEmailProfile(profile); err != nil {
+func (s *EmailProfileService) Create(ctx context.Context, input CreateEmailProfileInput) (*model.EmailProfile, error) {
+	profile := input.Profile
+	if err := prepareEmailProfile(profile); err != nil {
 		return nil, err
 	}
 
-	sealedPassword, err := s.sealBasicPassword(ctx, profile, password, true)
+	sealedPassword, err := s.sealBasicPassword(ctx, profile, input.Password, true)
 	if err != nil {
 		return nil, err
 	}
-	sealedOAuthClientSecret, err := s.sealOAuthClientSecret(ctx, profile, oauthClientSecret, true)
+	sealedOAuthClientSecret, err := s.sealOAuthClientSecret(ctx, profile, input.OAuthClientSecret, true)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.store.Create(ctx, domainID, userID, profile, sealedPassword, sealedOAuthClientSecret)
+	return s.store.Create(ctx, store.CreateEmailProfileParams{
+		DomainID:          input.DomainID,
+		UserID:            input.UserID,
+		Profile:           profile,
+		Password:          sealedPassword,
+		OAuthClientSecret: sealedOAuthClientSecret,
+	})
 }
 
 // Update replaces writable Email Profile settings within a domain.
-func (s *EmailProfileService) Update(
-	ctx context.Context,
-	domainID, userID, id int64,
-	profile *model.EmailProfile,
-	password string,
-	oauthClientSecret string,
-) (*model.EmailProfile, error) {
-	if err := validateEmailProfile(profile); err != nil {
+func (s *EmailProfileService) Update(ctx context.Context, input UpdateEmailProfileInput) (*model.EmailProfile, error) {
+	profile := input.Profile
+	if err := prepareEmailProfile(profile); err != nil {
 		return nil, err
 	}
 
-	entry := s.oauthTokenEntry(domainID, id)
+	entry := s.oauthTokenEntry(input.DomainID, input.ID)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
-	current, err := s.store.Locate(ctx, domainID, id)
+	current, err := s.store.Locate(ctx, input.DomainID, input.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	sealedPassword, err := s.sealBasicPassword(ctx, profile, password, false)
+	sealedPassword, err := s.sealBasicPassword(ctx, profile, input.Password, false)
 	if err != nil {
 		return nil, err
 	}
-	requireOAuthClientSecret := profile.AuthType == model.EmailAuthTypeOAuth2 &&
-		(current.AuthType != model.EmailAuthTypeOAuth2 ||
-			current.OAuthProvider != profile.OAuthProvider ||
-			current.OAuthClientID != profile.OAuthClientID)
 	sealedOAuthClientSecret, err := s.sealOAuthClientSecret(
-		ctx, profile, oauthClientSecret, requireOAuthClientSecret,
+		ctx, profile, input.OAuthClientSecret, profile.OAuthClientChangedFrom(current),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	updated, err := s.store.Update(
-		ctx, domainID, userID, id, profile, sealedPassword, sealedOAuthClientSecret,
-	)
+	updated, err := s.store.Update(ctx, store.UpdateEmailProfileParams{
+		DomainID:          input.DomainID,
+		UserID:            input.UserID,
+		ID:                input.ID,
+		Profile:           profile,
+		Password:          sealedPassword,
+		OAuthClientSecret: sealedOAuthClientSecret,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -174,20 +189,19 @@ func (s *EmailProfileService) testBasic(
 		return nil, invalidEmailProfile("password_required", "password is required")
 	}
 
-	imapResult := connectionTestResult(s.imap.Test(ctx, mailinfra.IMAPConnection{
+	imapResult, smtpResult := s.testConnections(ctx, mailinfra.IMAPConnection{
 		Host:     profile.IMAPHost,
 		Port:     profile.IMAPPort,
 		Security: profile.IMAPSecurity,
 		Username: profile.Username,
 		Password: password,
-	}))
-	smtpResult := connectionTestResult(s.smtp.Test(ctx, mailinfra.SMTPConnection{
+	}, mailinfra.SMTPConnection{
 		Host:     profile.SMTPHost,
 		Port:     profile.SMTPPort,
 		Security: profile.SMTPSecurity,
 		Username: profile.Username,
 		Password: password,
-	}))
+	})
 
 	return s.storeTestResult(ctx, domainID, id, imapResult, smtpResult)
 }
@@ -207,24 +221,38 @@ func (s *EmailProfileService) testOAuth2(
 		return s.storeOAuthTokenFailure(ctx, domainID, id, err)
 	}
 
-	imapResult := connectionTestResult(s.imap.Test(ctx, mailinfra.IMAPConnection{
+	imapResult, smtpResult := s.testConnections(ctx, mailinfra.IMAPConnection{
 		Host:        profile.IMAPHost,
 		Port:        profile.IMAPPort,
 		Security:    profile.IMAPSecurity,
 		Username:    profile.Username,
 		AuthType:    model.EmailAuthTypeOAuth2,
 		AccessToken: accessToken,
-	}))
-	smtpResult := connectionTestResult(s.smtp.Test(ctx, mailinfra.SMTPConnection{
+	}, mailinfra.SMTPConnection{
 		Host:        profile.SMTPHost,
 		Port:        profile.SMTPPort,
 		Security:    profile.SMTPSecurity,
 		Username:    profile.Username,
 		AuthType:    model.EmailAuthTypeOAuth2,
 		AccessToken: accessToken,
-	}))
+	})
 
 	return s.storeTestResult(ctx, domainID, id, imapResult, smtpResult)
+}
+
+// testConnections checks IMAP and SMTP at the same time, so a test takes as long
+// as the slower protocol; each result keeps its own error.
+func (s *EmailProfileService) testConnections(
+	ctx context.Context,
+	imapConnection mailinfra.IMAPConnection,
+	smtpConnection mailinfra.SMTPConnection,
+) (imapResult, smtpResult model.EmailConnectionTestResult) {
+	var wg sync.WaitGroup
+	wg.Go(func() { imapResult = connectionTestResult(s.imap.Test(ctx, imapConnection)) })
+	wg.Go(func() { smtpResult = connectionTestResult(s.smtp.Test(ctx, smtpConnection)) })
+	wg.Wait()
+
+	return imapResult, smtpResult
 }
 
 // storeOAuthTokenFailure stores a token refresh failure for both protocols
@@ -301,12 +329,7 @@ func connectionState(result *model.EmailProfileTestResult) (model.EmailConnectio
 
 // sealBasicPassword encrypts a write-only Basic Auth password. A missing password on update is represented by nil so the store preserves the current ciphertext.
 func (s *EmailProfileService) sealBasicPassword(ctx context.Context, profile *model.EmailProfile, password string, required bool) ([]byte, error) {
-	authType := profile.AuthType
-	if authType == "" {
-		authType = model.EmailAuthTypeBasic
-	}
-
-	if authType != model.EmailAuthTypeBasic {
+	if profile.AuthType != model.EmailAuthTypeBasic {
 		if password != "" {
 			return nil, invalidEmailProfile(
 				"password_not_allowed",
@@ -372,12 +395,19 @@ func (s *EmailProfileService) openBasicPassword(ctx context.Context, domainID, i
 	return string(password), nil
 }
 
-// validateEmailProfile checks persisted profile fields without establishing
-// IMAP, SMTP, or OAuth connections.
-func validateEmailProfile(profile *model.EmailProfile) error {
+// prepareEmailProfile fills the omitted optional settings and validates the result.
+func prepareEmailProfile(profile *model.EmailProfile) error {
 	if profile == nil {
 		return invalidEmailProfile("input_required", "email profile is required")
 	}
+	profile.ApplyDefaults()
+
+	return validateEmailProfile(profile)
+}
+
+// validateEmailProfile checks persisted profile fields without establishing
+// IMAP, SMTP, or OAuth connections.
+func validateEmailProfile(profile *model.EmailProfile) error {
 	if strings.TrimSpace(profile.Name) == "" {
 		return invalidEmailProfile("name_required", "name is required")
 	}
@@ -411,6 +441,9 @@ func validateEmailProfile(profile *model.EmailProfile) error {
 	if !validConnectionSecurity(profile.SMTPSecurity) {
 		return invalidEmailProfile("smtp_security_invalid", "SMTP security is invalid")
 	}
+	if profile.AuthType == "" {
+		return invalidEmailProfile("auth_type_required", "authentication type is required")
+	}
 	if !validAuthType(profile.AuthType) {
 		return invalidEmailProfile("auth_type_invalid", "authentication type is invalid")
 	}
@@ -425,10 +458,10 @@ func validateEmailProfile(profile *model.EmailProfile) error {
 	if profile.FlowID != nil && *profile.FlowID <= 0 {
 		return invalidEmailProfile("flow_id_invalid", "flow id must be greater than zero")
 	}
-	if profile.FetchIntervalSeconds != 0 && profile.FetchIntervalSeconds < minFetchIntervalSeconds {
+	if profile.FetchIntervalSeconds < model.MinEmailProfileFetchIntervalSeconds {
 		return invalidEmailProfile(
 			"fetch_interval_invalid",
-			fmt.Sprintf("fetch interval must be at least %d seconds", minFetchIntervalSeconds),
+			fmt.Sprintf("fetch interval must be at least %d seconds", model.MinEmailProfileFetchIntervalSeconds),
 		)
 	}
 
@@ -455,7 +488,7 @@ func validConnectionSecurity(value model.EmailConnectionSecurity) bool {
 }
 
 func validAuthType(value model.EmailAuthType) bool {
-	return value == "" || value == model.EmailAuthTypeBasic || value == model.EmailAuthTypeOAuth2
+	return value == model.EmailAuthTypeBasic || value == model.EmailAuthTypeOAuth2
 }
 
 func validOAuthProvider(value model.EmailOAuthProvider) bool {

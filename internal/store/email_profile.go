@@ -17,6 +17,27 @@ var ErrEmailProfileHasHistory = kiterrors.New(
 	kiterrors.WithCode(codes.FailedPrecondition),
 )
 
+// CreateEmailProfileParams is a new profile with its encrypted write-only secrets;
+// a nil secret is stored as absent.
+type CreateEmailProfileParams struct {
+	DomainID          int64
+	UserID            int64
+	Profile           *model.EmailProfile
+	Password          []byte
+	OAuthClientSecret []byte
+}
+
+// UpdateEmailProfileParams replaces writable settings of profile ID; a nil
+// secret keeps the stored one where the auth settings still allow it.
+type UpdateEmailProfileParams struct {
+	DomainID          int64
+	UserID            int64
+	ID                int64
+	Profile           *model.EmailProfile
+	Password          []byte
+	OAuthClientSecret []byte
+}
+
 // EmailProfileOAuthCredentials contains encrypted OAuth values loaded only for
 // internal authorization flows.
 type EmailProfileOAuthCredentials struct {
@@ -30,18 +51,24 @@ type EmailProfileStore interface {
 	List(ctx context.Context, domainID int64, filter model.EmailProfileFilter) ([]*model.EmailProfile, bool, error)
 	// Locate returns a profile only when it belongs to the requested domain.
 	Locate(ctx context.Context, domainID, id int64) (*model.EmailProfile, error)
-	// Create stores a profile owned by domainID and records userID as its author.
-	Create(ctx context.Context, domainID, userID int64, profile *model.EmailProfile, password, oauthClientSecret []byte) (*model.EmailProfile, error)
+	// Create stores a profile owned by params.DomainID and records params.UserID as its author.
+	Create(ctx context.Context, params CreateEmailProfileParams) (*model.EmailProfile, error)
 	// Update replaces writable profile settings within a domain.
-	Update(ctx context.Context, domainID, userID, id int64, profile *model.EmailProfile, password, oauthClientSecret []byte) (*model.EmailProfile, error)
+	Update(ctx context.Context, params UpdateEmailProfileParams) (*model.EmailProfile, error)
 	// GetPassword returns the stored encrypted Basic Auth password within a domain.
 	GetPassword(ctx context.Context, domainID, id int64) ([]byte, error)
 	// GetOAuthCredentials returns encrypted OAuth values within a domain.
 	GetOAuthCredentials(ctx context.Context, domainID, id int64) (*EmailProfileOAuthCredentials, error)
 	// SetOAuthRefreshToken stores an encrypted refresh token. A nil value clears it.
 	SetOAuthRefreshToken(ctx context.Context, domainID, id int64, refreshToken []byte) error
-	// SetOAuthRefreshTokenAndState atomically stores a refresh token and state.
-	SetOAuthRefreshTokenAndState(ctx context.Context, domainID, id int64, refreshToken []byte, state model.EmailConnectionState) error
+	// SetOAuthRefreshTokenAndState atomically stores a refresh token and state and
+	// returns the profile as stored.
+	SetOAuthRefreshTokenAndState(
+		ctx context.Context,
+		domainID, id int64,
+		refreshToken []byte,
+		state model.EmailConnectionState,
+	) (*model.EmailProfile, error)
 	// SetConnectionResult stores the latest connection state and error. A
 	// successful result also updates the last successful connection time.
 	SetConnectionResult(

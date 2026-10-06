@@ -5,7 +5,6 @@ package testhelpers
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -29,7 +29,7 @@ const DSNEnv = "EMAILS_TEST_POSTGRES_DSN"
 const postgresImage = "postgres:16-alpine"
 
 var (
-	testDB        *sql.DB
+	testDB        *pgxpool.Pool
 	testContainer *postgres.PostgresContainer
 )
 
@@ -58,17 +58,21 @@ func Start(ctx context.Context) error {
 		}
 	}
 
-	db, err := sql.Open("pgx", dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("parse database config: %w", err)
+	}
+	db, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
+	if err := db.Ping(ctx); err != nil {
+		db.Close()
 
 		return fmt.Errorf("database is not reachable: %w", err)
 	}
 	if err := prepare(ctx, db); err != nil {
-		_ = db.Close()
+		db.Close()
 
 		return fmt.Errorf("prepare database: %w", err)
 	}
@@ -79,7 +83,7 @@ func Start(ctx context.Context) error {
 }
 
 // Database returns the database initialized by TestMain.
-func Database(t *testing.T) *sql.DB {
+func Database(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	if testDB == nil {
@@ -112,7 +116,7 @@ func startContainer(ctx context.Context) (*postgres.PostgresContainer, error) {
 func Close(ctx context.Context) error {
 	var closeErr error
 	if testDB != nil {
-		closeErr = testDB.Close()
+		testDB.Close()
 		testDB = nil
 	}
 	if testContainer != nil {
@@ -127,7 +131,7 @@ func Close(ctx context.Context) error {
 
 // prepare applies the embedded migrations through the same migrator the service
 // uses, so the tests exercise the real migration path.
-func prepare(ctx context.Context, db *sql.DB) error {
+func prepare(ctx context.Context, db *pgxpool.Pool) error {
 	// The Email Profile projection joins a table owned by another service, which
 	// the tests stand in for.
 	const directoryStub = `
@@ -138,11 +142,14 @@ CREATE TABLE IF NOT EXISTS directory.wbt_user (
     username text NOT NULL DEFAULT ''
 );`
 
-	if _, err := db.ExecContext(ctx, directoryStub); err != nil {
+	if _, err := db.Exec(ctx, directoryStub); err != nil {
 		return fmt.Errorf("directory stub: %w", err)
 	}
 
-	migrator, err := migrate.NewMigrator(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stdDB := stdlib.OpenDBFromPool(db)
+	defer stdDB.Close()
+
+	migrator, err := migrate.NewMigrator(stdDB, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		return err
 	}
@@ -151,18 +158,18 @@ CREATE TABLE IF NOT EXISTS directory.wbt_user (
 }
 
 // Reset empties the email tables so each test starts from a known state.
-func Reset(t *testing.T, db *sql.DB) {
+func Reset(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 
 	const query = `DELETE FROM email.outbox; DELETE FROM email.inbound_failure; DELETE FROM email.thread; DELETE FROM email.profile;`
-	if _, err := db.ExecContext(context.Background(), query); err != nil {
+	if _, err := db.Exec(context.Background(), query); err != nil {
 		t.Fatalf("reset database: %v", err)
 	}
 }
 
 // SeedAssignment gives a profile an owner and a fencing generation, which every
 // write of an inbound email is checked against.
-func SeedAssignment(t *testing.T, db *sql.DB, domainID, profileID int64, owner string, generation int64) {
+func SeedAssignment(t *testing.T, db *pgxpool.Pool, domainID, profileID int64, owner string, generation int64) {
 	t.Helper()
 
 	const query = `
@@ -172,13 +179,13 @@ ON CONFLICT (profile_id) DO UPDATE SET
     owner_instance_id = EXCLUDED.owner_instance_id,
     assignment_generation = EXCLUDED.assignment_generation`
 
-	if _, err := db.ExecContext(context.Background(), query, profileID, domainID, owner, generation); err != nil {
+	if _, err := db.Exec(context.Background(), query, profileID, domainID, owner, generation); err != nil {
 		t.Fatalf("seed assignment: %v", err)
 	}
 }
 
 // SeedProfile creates an enabled profile and returns its identifier.
-func SeedProfile(t *testing.T, db *sql.DB, domainID int64, name string) int64 {
+func SeedProfile(t *testing.T, db *pgxpool.Pool, domainID int64, name string) int64 {
 	t.Helper()
 
 	const query = `
@@ -190,7 +197,7 @@ VALUES ($1, $2, $2 || '@example.org', 'imap.example.org', 993, 'tls', 'smtp.exam
 RETURNING id`
 
 	var id int64
-	if err := db.QueryRowContext(context.Background(), query, domainID, name).Scan(&id); err != nil {
+	if err := db.QueryRow(context.Background(), query, domainID, name).Scan(&id); err != nil {
 		t.Fatalf("seed profile: %v", err)
 	}
 

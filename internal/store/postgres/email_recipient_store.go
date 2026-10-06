@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 
-	"github.com/lib/pq"
-
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
@@ -54,16 +52,16 @@ FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[])
 		ordinals = append(ordinals, recipient.Ordinal)
 	}
 
-	_, err := s.db.ExecContext(
+	_, err := s.db.Exec(
 		ctx,
 		query,
 		domainID,
 		messageID,
-		pq.Array(types),
-		pq.Array(addresses),
-		pq.Array(normalized),
-		pq.Array(displayName),
-		pq.Array(ordinals),
+		types,
+		addresses,
+		normalized,
+		displayName,
+		ordinals,
 	)
 
 	return ParseError(err)
@@ -79,7 +77,7 @@ FROM email.recipient
 WHERE domain_id = $1 AND message_id = $2
 ORDER BY type, ordinal`
 
-	rows, err := s.db.QueryContext(ctx, query, domainID, messageID)
+	rows, err := s.db.Query(ctx, query, domainID, messageID)
 	if err != nil {
 		return nil, ParseError(err)
 	}

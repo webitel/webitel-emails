@@ -1,9 +1,9 @@
 package postgres
 
 import (
-	"database/sql"
 	stderrors "errors"
 
+	"github.com/jackc/pgx/v5"
 	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
 	"google.golang.org/grpc/codes"
 
@@ -27,7 +27,7 @@ func ParseError(err error) error {
 
 	// Not-found never reveals whether the row exists but belongs to another
 	// domain: every read is domain-scoped and both cases must look the same.
-	if stderrors.Is(err, sql.ErrNoRows) {
+	if stderrors.Is(err, pgx.ErrNoRows) {
 		return kiterrors.NotFound(
 			"entity does not exist or access is denied",
 			kiterrors.WithID("store.pg.not_found"),

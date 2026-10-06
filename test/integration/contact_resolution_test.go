@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/webitel/webitel-emails/internal/model"
 	storepostgres "github.com/webitel/webitel-emails/internal/store/postgres"
 	"github.com/webitel/webitel-emails/test/integration/testhelpers"
@@ -63,7 +65,7 @@ func TestContactResolutionStoreUsesFirstMessageAndProtectsTenant(t *testing.T) {
 
 func insertMessageWithSender(
 	t *testing.T,
-	db *sql.DB,
+	db *pgxpool.Pool,
 	domainID, profileID, threadID int64,
 	messageID, sender string,
 	receivedAt time.Time,
@@ -71,7 +73,7 @@ func insertMessageWithSender(
 	t.Helper()
 
 	var id int64
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 INSERT INTO email.message (domain_id, thread_id, profile_id, direction, message_id, received_at)
 VALUES ($1, $2, $3, 'inbound', $4, $5)
 RETURNING id`, domainID, threadID, profileID, messageID, receivedAt).Scan(&id); err != nil {
@@ -80,7 +82,7 @@ RETURNING id`, domainID, threadID, profileID, messageID, receivedAt).Scan(&id); 
 	if sender == "" {
 		return
 	}
-	if _, err := db.ExecContext(context.Background(), `
+	if _, err := db.Exec(context.Background(), `
 INSERT INTO email.recipient (domain_id, message_id, type, address, normalized_address, ordinal)
 VALUES ($1, $2, 'from', $3, $3, 0)`, domainID, id, sender); err != nil {
 		t.Fatalf("seed sender %s: %v", sender, err)
@@ -89,7 +91,7 @@ VALUES ($1, $2, 'from', $3, $3, 0)`, domainID, id, sender); err != nil {
 
 func assertStoredContact(
 	t *testing.T,
-	db *sql.DB,
+	db *pgxpool.Pool,
 	threadID int64,
 	wantID *int64,
 	wantState model.EmailContactResolutionState,
@@ -98,7 +100,7 @@ func assertStoredContact(
 
 	var contactID sql.NullInt64
 	var state string
-	if err := db.QueryRowContext(context.Background(), `
+	if err := db.QueryRow(context.Background(), `
 SELECT contact_id, contact_resolution_state FROM email.thread WHERE id = $1`, threadID).
 		Scan(&contactID, &state); err != nil {
 		t.Fatalf("read stored contact: %v", err)

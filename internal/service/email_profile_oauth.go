@@ -36,6 +36,18 @@ type emailProfileOAuthState struct {
 	ExpiresAt int64                    `json:"expires_at"`
 }
 
+// expiredAt reports whether the state can no longer complete an authorization at now.
+func (s *emailProfileOAuthState) expiredAt(now time.Time) bool {
+	return now.Unix() >= s.ExpiresAt
+}
+
+// validAt reports whether the state names a profile and a supported provider and
+// has not expired at now.
+func (s *emailProfileOAuthState) validAt(now time.Time) bool {
+	return s.DomainID > 0 && s.UserID > 0 && s.ProfileID > 0 &&
+		validOAuthProvider(s.Provider) && !s.expiredAt(now)
+}
+
 // BeginOAuth creates the provider authorization URL for an Email Profile.
 func (s *EmailProfileService) BeginOAuth(ctx context.Context, domainID, userID, id int64) (*model.EmailProfileOAuthStart, error) {
 	profile, err := s.store.Locate(ctx, domainID, id)
@@ -110,14 +122,15 @@ func (s *EmailProfileService) CompleteOAuth(ctx context.Context, domainID, userI
 	}
 
 	// A new authorization remains idle until its IMAP/SMTP connection is tested.
-	if err := s.store.SetOAuthRefreshTokenAndState(
+	updated, err := s.store.SetOAuthRefreshTokenAndState(
 		ctx, domainID, id, sealedRefreshToken, model.EmailConnectionStateIdle,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
 	entry.token = token
 
-	return s.store.Locate(ctx, domainID, id)
+	return updated, nil
 }
 
 // accessToken returns a valid cached or refreshed token for an OAuth2 profile.
@@ -191,14 +204,15 @@ func (s *EmailProfileService) DisconnectOAuth(ctx context.Context, domainID, id 
 		)
 	}
 
-	if err := s.store.SetOAuthRefreshTokenAndState(
+	updated, err := s.store.SetOAuthRefreshTokenAndState(
 		ctx, domainID, id, nil, model.EmailConnectionStateIdle,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
 	entry.token = nil
 
-	return s.store.Locate(ctx, domainID, id)
+	return updated, nil
 }
 
 // isOAuthReauthorizationRequired reports whether the provider rejected the stored
@@ -332,8 +346,7 @@ func (s *EmailProfileService) openOAuthState(ctx context.Context, encodedState s
 	if err := json.Unmarshal(payload, state); err != nil {
 		return nil, err
 	}
-	if state.DomainID <= 0 || state.UserID <= 0 || state.ProfileID <= 0 ||
-		!validOAuthProvider(state.Provider) || time.Now().Unix() >= state.ExpiresAt {
+	if !state.validAt(time.Now()) {
 		return nil, invalidOAuthState()
 	}
 

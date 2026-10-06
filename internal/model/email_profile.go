@@ -82,6 +82,37 @@ type EmailProfile struct {
 	UpdatedBy *Lookup
 }
 
+// Settings an Email Profile takes when a client leaves them empty.
+const (
+	DefaultEmailProfileMailbox                    = "INBOX"
+	DefaultEmailProfileFetchIntervalSeconds int32 = 5
+)
+
+// MinEmailProfileFetchIntervalSeconds is the shortest polling interval a profile may set.
+const MinEmailProfileFetchIntervalSeconds int32 = 5
+
+// ApplyDefaults fills the optional settings a client left empty.
+func (p *EmailProfile) ApplyDefaults() {
+	if p.Mailbox == "" {
+		p.Mailbox = DefaultEmailProfileMailbox
+	}
+	if p.FetchIntervalSeconds == 0 {
+		p.FetchIntervalSeconds = DefaultEmailProfileFetchIntervalSeconds
+	}
+}
+
+// OAuthClientChangedFrom reports whether p switches to OAuth2 or to another OAuth2
+// client than current, so the client secret stored for current no longer applies.
+func (p *EmailProfile) OAuthClientChangedFrom(current *EmailProfile) bool {
+	if p.AuthType != EmailAuthTypeOAuth2 {
+		return false
+	}
+
+	return current.AuthType != EmailAuthTypeOAuth2 ||
+		current.OAuthProvider != p.OAuthProvider ||
+		current.OAuthClientID != p.OAuthClientID
+}
+
 // EmailProfileFilter contains list parameters accepted by the Email Profile API.
 type EmailProfileFilter struct {
 	Page   int32

@@ -1,6 +1,4 @@
 -- +goose Up
-CREATE SCHEMA email;
-
 CREATE TABLE email.profile (
     id                            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     domain_id                     bigint NOT NULL,
@@ -64,8 +62,8 @@ CREATE TABLE email.profile (
         CHECK (connection_state IN ('idle', 'ready', 'error', 'reauthorization_required'))
 );
 
-CREATE INDEX profile_domain_idx ON email.profile (domain_id);
+-- Target of the tenant-safe foreign keys to a profile; it also serves lookups by domain_id.
+CREATE UNIQUE INDEX profile_domain_id_uidx ON email.profile (domain_id, id);
 
 -- +goose Down
 DROP TABLE IF EXISTS email.profile;
-DROP SCHEMA IF EXISTS email;

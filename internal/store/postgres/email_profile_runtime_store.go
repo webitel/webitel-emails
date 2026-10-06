@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
 
 	"github.com/webitel/webitel-emails/internal/model"
@@ -27,18 +29,18 @@ const emailProfileRuntimeColumns = `r.profile_id,
     r.updated_at`
 
 type emailProfileRuntimeStore struct {
-	db *sql.DB
+	db Querier
 }
 
 var _ store.EmailProfileRuntimeStore = (*emailProfileRuntimeStore)(nil)
 
 // NewEmailProfileRuntimeStore creates a runtime store over the shared database connection.
-func NewEmailProfileRuntimeStore(db *sql.DB) *emailProfileRuntimeStore {
+func NewEmailProfileRuntimeStore(db Querier) *emailProfileRuntimeStore {
 	return &emailProfileRuntimeStore{db: db}
 }
 
 func (s *emailProfileRuntimeStore) Get(ctx context.Context, profileID int64) (*model.EmailProfileRuntime, error) {
-	row := s.db.QueryRowContext(
+	row := s.db.QueryRow(
 		ctx,
 		"SELECT "+emailProfileRuntimeColumns+" FROM email.profile_runtime r WHERE r.profile_id = $1",
 		profileID,
@@ -87,13 +89,13 @@ ON CONFLICT (profile_id) DO UPDATE SET
 RETURNING r.profile_id, r.domain_id, r.owner_instance_id, r.assignment_generation`
 
 	assignment := new(model.EmailProfileAssignment)
-	if err := s.db.QueryRowContext(ctx, query, profileID, instanceID).Scan(
+	if err := s.db.QueryRow(ctx, query, profileID, instanceID).Scan(
 		&assignment.ProfileID,
 		&assignment.DomainID,
 		&assignment.OwnerInstanceID,
 		&assignment.Generation,
 	); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, emailProfileRuntimeNotFound(err)
 		}
 
@@ -111,7 +113,7 @@ UPDATE email.profile_runtime SET
     updated_at = now()
 WHERE profile_id = $1 AND owner_instance_id IS NOT NULL`
 
-	_, err := s.db.ExecContext(ctx, query, profileID)
+	_, err := s.db.Exec(ctx, query, profileID)
 
 	return err
 }
@@ -124,7 +126,7 @@ LEFT JOIN email.profile_runtime r ON r.domain_id = p.domain_id AND r.profile_id 
 WHERE p.enabled OR r.owner_instance_id IS NOT NULL
 ORDER BY p.id`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +166,7 @@ ORDER BY r.next_check_at ASC NULLS FIRST, r.profile_id ASC`
 		query += " LIMIT $2"
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +198,7 @@ WHERE profile_id = $1
     AND owner_instance_id = $2
     AND assignment_generation = $3`
 
-	result, err := s.db.ExecContext(
+	result, err := s.db.Exec(
 		ctx,
 		query,
 		assignment.ProfileID,
@@ -256,7 +258,7 @@ WITH runtime AS (
 SELECT count(*) FROM runtime`
 
 	var updated int
-	if err := s.db.QueryRowContext(
+	if err := s.db.QueryRow(
 		ctx,
 		query,
 		assignment.ProfileID,
@@ -280,13 +282,8 @@ SELECT count(*) FROM runtime`
 }
 
 // requireFencedWrite reports a fenced write that matched no row as stale.
-func requireFencedWrite(result sql.Result) error {
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if affected == 0 {
+func requireFencedWrite(result pgconn.CommandTag) error {
+	if result.RowsAffected() == 0 {
 		return store.ErrStaleEmailProfileAssignment
 	}
 
@@ -344,7 +341,7 @@ func scanEmailProfileRuntime(row rowScanner) (*model.EmailProfileRuntime, error)
 		&runtime.CreatedAt,
 		&runtime.UpdatedAt,
 	); err != nil {
-		if stderrors.Is(err, sql.ErrNoRows) {
+		if stderrors.Is(err, pgx.ErrNoRows) {
 			return nil, emailProfileRuntimeNotFound(err)
 		}
 

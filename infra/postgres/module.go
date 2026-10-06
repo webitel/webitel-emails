@@ -2,13 +2,12 @@
 package postgres
 
 import (
-	"database/sql"
-
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 )
 
 var Module = fx.Module(
 	"postgres",
 	fx.Provide(New),
-	fx.Invoke(func(*sql.DB) {}),
+	fx.Invoke(func(*pgxpool.Pool) {}),
 )

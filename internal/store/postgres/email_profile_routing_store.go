@@ -22,7 +22,7 @@ func (s *emailProfileRoutingStore) FlowID(ctx context.Context, domainID, profile
 	const query = `SELECT flow_id FROM email.profile WHERE domain_id = $1 AND id = $2`
 
 	var flowID sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, query, domainID, profileID).Scan(&flowID); err != nil {
+	if err := s.db.QueryRow(ctx, query, domainID, profileID).Scan(&flowID); err != nil {
 		return nil, ParseError(err)
 	}
 	if !flowID.Valid {

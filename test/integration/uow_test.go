@@ -118,7 +118,7 @@ func TestUnitOfWorkTransactions(t *testing.T) {
 				return err
 			}
 			cancel()
-			// database/sql rolls the transaction back on its own once ctx is done.
+			// Commit must fail once the operation context is canceled.
 			time.Sleep(100 * time.Millisecond)
 
 			return nil

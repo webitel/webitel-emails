@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lib/pq"
-
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
@@ -80,19 +78,19 @@ FROM unnest(
 		reasons = append(reasons, string(attachment.SkippedReason))
 	}
 
-	_, err := s.db.ExecContext(
+	_, err := s.db.Exec(
 		ctx,
 		query,
 		domainID,
 		messageID,
-		pq.Array(contentIDs),
-		pq.Array(disposition),
-		pq.Array(fileNames),
-		pq.Array(mimeTypes),
-		pq.Array(sizes),
-		pq.Array(positions),
-		pq.Array(states),
-		pq.Array(reasons),
+		contentIDs,
+		disposition,
+		fileNames,
+		mimeTypes,
+		sizes,
+		positions,
+		states,
+		reasons,
 	)
 
 	return ParseError(err)
@@ -107,7 +105,7 @@ FROM email.message_attachment a
 WHERE a.domain_id = $1 AND a.message_id = $2
 ORDER BY a.position`
 
-	rows, err := s.db.QueryContext(ctx, query, domainID, messageID)
+	rows, err := s.db.Query(ctx, query, domainID, messageID)
 	if err != nil {
 		return nil, ParseError(err)
 	}
@@ -146,17 +144,12 @@ UPDATE email.message_attachment SET
 WHERE domain_id = $1 AND message_id = $2 AND position = $3
     AND state = 'pending' AND file_id IS NULL`
 
-	result, err := s.db.ExecContext(ctx, query, domainID, messageID, position, fileID)
+	result, err := s.db.Exec(ctx, query, domainID, messageID, position, fileID)
 	if err != nil {
 		return false, ParseError(err)
 	}
 
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-
-	return affected > 0, nil
+	return result.RowsAffected() > 0, nil
 }
 
 func scanEmailMessageAttachment(row rowScanner) (*model.EmailMessageAttachment, error) {
