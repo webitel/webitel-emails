@@ -1,0 +1,39 @@
+// Package infra wires external infrastructure used by the service.
+package infra
+
+import (
+	"go.uber.org/fx"
+
+	authinfra "github.com/webitel/webitel-emails/infra/auth"
+	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
+	"github.com/webitel/webitel-emails/infra/crypto"
+	servicediscovery "github.com/webitel/webitel-emails/infra/discovery"
+	"github.com/webitel/webitel-emails/infra/leader"
+	"github.com/webitel/webitel-emails/infra/logging"
+	"github.com/webitel/webitel-emails/infra/mail"
+	"github.com/webitel/webitel-emails/infra/oauth"
+	"github.com/webitel/webitel-emails/infra/postgres"
+	"github.com/webitel/webitel-emails/infra/pubsub"
+	grpcserver "github.com/webitel/webitel-emails/infra/server/grpc"
+	storageinfra "github.com/webitel/webitel-emails/infra/storage"
+	"github.com/webitel/webitel-emails/infra/tls"
+	"github.com/webitel/webitel-emails/infra/webitelapp"
+)
+
+var Module = fx.Module(
+	"infra",
+	authinfra.Module,
+	crypto.Module,
+	logging.Module,
+	mail.Module,
+	oauth.Module,
+	postgres.Module,
+	pubsub.Module,
+	tls.Module,
+	grpcserver.Module,
+	servicediscovery.Module,
+	leader.Module,
+	storageinfra.Module,
+	webitelapp.Module,
+	contactsinfra.Module,
+)

@@ -1,0 +1,27 @@
+version: v2
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/webitel/webitel-emails/api/email
+      module: buf.build/webitel/general
+
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: api/email
+    opt: paths=source_relative
+    include_imports: true
+
+  - remote: buf.build/grpc/go
+    out: api/email
+    opt: paths=source_relative
+
+  # Generate Webitel service metadata such as objclass and method access.
+  - local: ["go", "run", "github.com/webitel/webitel-go-kit/cmd/protoc-gen-go-webitel@v0.0.20"]
+    out: api/email
+
+inputs:
+  - git_repo: "https://github.com/webitel/protos"
+    branch: "main"
+    subdir: email
