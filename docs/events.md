@@ -108,7 +108,9 @@ Publishing is mandatory, so events wait in the Outbox until their queue exists:
 2. start `flow_manager` with `EMAIL_EVENTS=true`;
 3. check that the exchanges, both queues, their bindings and a consumer of
    `flow.email.inbound` exist;
-4. only then enable the relay and polling of email-service.
+4. only then enable Email Profiles, which starts polling. In production keep
+   them disabled until the conditions of the "Inbound email" section of the
+   README are met.
 
 Until step 2 the relay logs `unroutable` and retries without spending attempts.
 For high availability enable `EMAIL_EVENTS=true` on every `flow_manager`
