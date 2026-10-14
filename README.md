@@ -68,9 +68,12 @@ A Message that becomes `ready` writes an event to the Transactional Outbox, and
 [docs/events.md](docs/events.md), including the rollout order. The Flow can put
 the Thread into an Inbound Email Queue of `call_center` with its `joinQueue`
 application. With its Email distribution enabled, `call_center` then assigns the
-email to an agent (see the `call_center` README), but the operator does not get
-it yet: an assigned email has no Workspace event, read API or operator commands,
-and is not released on timeout, logout or auto-offline.
+email to an agent and keeps its lifecycle: taking, postponing, resuming,
+returning and completing it, waking it on a new email, and returning it to the
+queue when an offer expires, a deadline passes or the agent logs out (see the
+`call_center` README). The operator does not get it yet: an assigned email has
+no Workspace event, read API or Workspace commands, and its status does not
+reach this service.
 
 Do not enable polling in production until these parts are released. Production
 use will also need compatible `call_center`, `flow_manager` and `engine`
