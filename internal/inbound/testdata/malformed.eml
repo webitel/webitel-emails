@@ -1,0 +1,11 @@
+From: sender@example.org
+To: receiver@example.org
+Subject: Truncated multipart
+Message-ID: <malformed@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="broken"
+
+--broken
+Content-Type: text/plain; charset=UTF-8
+
+The closing MIME boundary is missing.

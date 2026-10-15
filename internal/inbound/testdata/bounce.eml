@@ -1,0 +1,33 @@
+Return-Path: <>
+From: Mail Delivery System <postmaster@example.org>
+To: sender@example.org
+Subject: Delivery Status Notification
+Message-ID: <bounce@example.org>
+Auto-Submitted: auto-replied
+MIME-Version: 1.0
+Content-Type: multipart/report; boundary="report"; report-type=delivery-status
+
+--report
+Content-Type: text/plain; charset=UTF-8
+
+Delivery failed.
+--report
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; example.org
+
+Final-Recipient: rfc822; bob@example.org
+Action: failed
+Status: 5.1.1
+Diagnostic-Code: smtp; 550 5.1.1 User unknown
+--report
+Content-Type: message/rfc822
+
+From: sender@example.org
+To: bob@example.org
+Subject: Original message
+Message-ID: <original@example.org>
+Content-Type: text/plain; charset=UTF-8
+
+Original body.
+--report--

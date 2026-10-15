@@ -1,0 +1,25 @@
+From: sender@example.org
+To: receiver@example.org
+Subject: Attachments
+Message-ID: <attachments@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related"
+
+--related
+Content-Type: text/html; charset=UTF-8
+
+<p>Logo: <img src="cid:logo@example.org"></p>
+--related
+Content-Type: image/png
+Content-Disposition: inline
+Content-ID: <logo@example.org>
+Content-Transfer-Encoding: base64
+
+aW1hZ2U=
+--related
+Content-Type: text/plain; name="report.txt"
+Content-Disposition: attachment; filename="report.txt"
+Content-Transfer-Encoding: base64
+
+cmVwb3J0
+--related--
