@@ -31,6 +31,7 @@ type Config struct {
 	Contacts            ContactsConfig            `mapstructure:"contacts"`
 	InboundEvent        InboundEventConfig        `mapstructure:"inbound_event"`
 	Outbox              OutboxConfig              `mapstructure:"outbox"`
+	ThreadProjection    ThreadProjectionConfig    `mapstructure:"thread_projection"`
 }
 
 // OutboxConfig tunes publication of Outbox events to RabbitMQ.
@@ -48,6 +49,20 @@ type OutboxConfig struct {
 	Retention       time.Duration `mapstructure:"retention"`
 	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
 	CleanupBatch    int           `mapstructure:"cleanup_batch"`
+}
+
+// ThreadProjectionConfig tunes the consumer of the call_center attempt snapshots.
+type ThreadProjectionConfig struct {
+	// Prefetch bounds the unacknowledged snapshots RabbitMQ gives one instance.
+	Prefetch int `mapstructure:"prefetch"`
+	// DeliveryLimit is the x-delivery-limit of the queue; RabbitMQ refuses a
+	// redeclaration with another value, so it cannot change once the queue exists.
+	DeliveryLimit int `mapstructure:"delivery_limit"`
+	// The pause after a broker or database failure grows from the initial to the max interval.
+	RetryInitialInterval time.Duration `mapstructure:"retry_initial_interval"`
+	RetryMaxInterval     time.Duration `mapstructure:"retry_max_interval"`
+	// ReportInterval is how often the applied, stale and rejected counts are logged.
+	ReportInterval time.Duration `mapstructure:"report_interval"`
 }
 
 // InboundEventConfig bounds the snapshot carried by the event that starts Flow.
@@ -238,6 +253,12 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("outbox.retention", 72*time.Hour, "how long a published Outbox event is kept")
 	flags.Duration("outbox.cleanup_interval", time.Hour, "how often published Outbox events are removed")
 	flags.Int("outbox.cleanup_batch", 1000, "published Outbox events removed by one statement")
+
+	flags.Int("thread_projection.prefetch", 20, "unacknowledged attempt snapshots RabbitMQ gives one instance")
+	flags.Int("thread_projection.delivery_limit", event.DefaultProjectionDeliveryLimit, "deliveries of one attempt snapshot before it moves to the dead letter queue")
+	flags.Duration("thread_projection.retry_initial_interval", time.Second, "first pause after a RabbitMQ or database failure")
+	flags.Duration("thread_projection.retry_max_interval", 30*time.Second, "longest pause after repeated RabbitMQ or database failures")
+	flags.Duration("thread_projection.report_interval", time.Minute, "how often the applied, stale and rejected snapshots are logged")
 }
 
 func (c *Config) validate() error {
@@ -272,6 +293,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: inbound_event: %w", err)
 	}
 	if err := c.Outbox.validate(); err != nil {
+		return err
+	}
+	if err := c.ThreadProjection.validate(); err != nil {
 		return err
 	}
 
@@ -376,6 +400,20 @@ func (c OutboxConfig) validate() error {
 	}
 	if c.RetryInitialInterval <= 0 || c.RetryMaxInterval < c.RetryInitialInterval {
 		return fmt.Errorf("config: outbox.retry_initial_interval must be positive and not above retry_max_interval")
+	}
+
+	return nil
+}
+
+func (c ThreadProjectionConfig) validate() error {
+	if c.Prefetch < 1 || c.DeliveryLimit < 1 {
+		return fmt.Errorf("config: thread_projection.prefetch and thread_projection.delivery_limit must be at least 1")
+	}
+	if c.RetryInitialInterval <= 0 || c.RetryMaxInterval < c.RetryInitialInterval {
+		return fmt.Errorf("config: thread_projection.retry_initial_interval must be positive and not above retry_max_interval")
+	}
+	if c.ReportInterval <= 0 {
+		return fmt.Errorf("config: thread_projection.report_interval must be positive")
 	}
 
 	return nil

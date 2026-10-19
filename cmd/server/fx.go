@@ -11,6 +11,7 @@ import (
 	"github.com/webitel/webitel-emails/internal/inbound"
 	"github.com/webitel/webitel-emails/internal/outbox"
 	"github.com/webitel/webitel-emails/internal/polling"
+	"github.com/webitel/webitel-emails/internal/projection"
 	"github.com/webitel/webitel-emails/internal/service"
 	storepostgres "github.com/webitel/webitel-emails/internal/store/postgres"
 )
@@ -32,5 +33,6 @@ func modules(cfg *config.Config) fx.Option {
 		inbound.Module,
 		outbox.Module,
 		polling.Module,
+		projection.Module,
 	)
 }

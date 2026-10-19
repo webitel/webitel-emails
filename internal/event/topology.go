@@ -16,6 +16,22 @@ const (
 	ContentType = "application/json"
 )
 
+// Broker topology of the Email attempt snapshots call_center publishes; same
+// rules as above, documented in docs/events.md.
+const (
+	// AttemptExchange is declared by call_center and by this service.
+	AttemptExchange     = "cc.email.events"
+	AttemptExchangeType = "topic"
+
+	// Declared by this service, the consumer of the snapshots; both queues are quorum.
+	ProjectionQueue                  = "email.thread.projection"
+	ProjectionQueueType              = "quorum"
+	ProjectionDeadLetterExchange     = "cc.email.events.dlx"
+	ProjectionDeadLetterExchangeType = "fanout"
+	ProjectionDeadLetterQueue        = "email.thread.projection.dlq"
+	DefaultProjectionDeliveryLimit   = 20
+)
+
 // Headers duplicate envelope fields, so an event is traceable without decoding.
 const (
 	HeaderEventID       = "x-event-id"

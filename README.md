@@ -71,9 +71,11 @@ application. With its Email distribution enabled, `call_center` then assigns the
 email to an agent and keeps its lifecycle: taking, postponing, resuming,
 returning and completing it, waking it on a new email, and returning it to the
 queue when an offer expires, a deadline passes or the agent logs out (see the
-`call_center` README). The operator does not get it yet: an assigned email has
-no Workspace event, read API or Workspace commands, and its status does not
-reach this service.
+`call_center` README). With the snapshot publisher enabled, the Thread's status,
+queue, current agent and postponement deadline reach this service as a versioned
+projection of `call_center` snapshots.
+The operator still cannot handle an assigned email: there is no Workspace
+event, read API or Workspace commands yet.
 
 Do not enable polling in production until these parts are released. Production
 use will also need compatible `call_center`, `flow_manager` and `engine`
