@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -162,6 +164,48 @@ func (c *Client) GenerateFileLink(
 	}
 
 	return response, nil
+}
+
+// DownloadLinkRequest asks storage to sign a download link to a domain's file;
+// the empty source addresses it by file id.
+func DownloadLinkRequest(domainID, fileID int64, ttl time.Duration) *storagepb.GenerateFileLinkRequest {
+	return &storagepb.GenerateFileLinkRequest{
+		DomainId: domainID,
+		FileId:   fileID,
+		Action:   "download",
+		Query:    map[string]string{"expires": strconv.FormatInt(ttl.Milliseconds(), 10)},
+	}
+}
+
+// ResolveLink joins the relative link storage signed with its public base URL.
+func ResolveLink(response *storagepb.GenerateFileLinkResponse) (string, error) {
+	base, err := url.Parse(response.GetBaseUrl())
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", fmt.Errorf("storage: link base url is not absolute")
+	}
+	relative, err := url.Parse(response.GetUrl())
+	if err != nil || response.GetUrl() == "" {
+		return "", fmt.Errorf("storage: link url is missing or malformed")
+	}
+	// The signed path is appended to the base path, which may carry a proxy
+	// prefix, rather than replacing it.
+	resolved := *base
+	resolved.Path = strings.TrimRight(base.Path, "/") + "/" + strings.TrimLeft(relative.Path, "/")
+	resolved.RawPath = ""
+	resolved.RawQuery = relative.RawQuery
+
+	return resolved.String(), nil
+}
+
+// DownloadLink returns a short-lived absolute link to download one stored file.
+// The link itself is never logged.
+func (c *Client) DownloadLink(ctx context.Context, domainID, fileID int64, ttl time.Duration) (string, error) {
+	response, err := c.GenerateFileLink(ctx, DownloadLinkRequest(domainID, fileID, ttl))
+	if err != nil {
+		return "", err
+	}
+
+	return ResolveLink(response)
 }
 
 // Close releases the connection pool.

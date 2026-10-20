@@ -84,6 +84,7 @@ func newEmail(profileID int64, messageID string, uid uint32, options ...emailOpt
 func TestPersistenceRoundTrip(t *testing.T) {
 	db := testhelpers.Database(t)
 	testhelpers.Reset(t, db)
+	t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 
 	email := newEmail(profileID, "<first@x>", 5, withReferences(`<a,b@x>`, `<"quoted"@x>`))
@@ -171,6 +172,7 @@ FROM email.message m JOIN email.thread t ON t.id = m.thread_id`).
 func TestPersistenceRollsBackTheAggregateOnRecipientError(t *testing.T) {
 	db := testhelpers.Database(t)
 	testhelpers.Reset(t, db)
+	t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 
 	email := newEmail(profileID, "<invalid-recipient@x>", 6)
@@ -195,6 +197,7 @@ func TestConcurrentDeliveryKeepsOneConversation(t *testing.T) {
 
 	t.Run("the same email delivered many times", func(t *testing.T) {
 		testhelpers.Reset(t, db)
+		t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 		profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 		handler := newHandler(db)
 

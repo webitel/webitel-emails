@@ -32,6 +32,11 @@ var Module = fx.Module(
 			fx.As(new(store.EmailThreadStore)),
 		),
 		fx.Annotate(
+			NewEmailThreadReadStore,
+			fx.From(new(*pgxpool.Pool)),
+			fx.As(new(store.EmailThreadReadStore)),
+		),
+		fx.Annotate(
 			NewEmailMessageStore,
 			fx.From(new(*pgxpool.Pool)),
 			fx.As(new(store.EmailMessageStore)),

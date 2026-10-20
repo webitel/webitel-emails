@@ -95,6 +95,7 @@ func emailWithAttachment(profileID int64, messageID string, uid uint32) *model.P
 func TestFailedAttachmentAndQuarantineAreWrittenTogether(t *testing.T) {
 	db := testhelpers.Database(t)
 	testhelpers.Reset(t, db)
+	t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 
 	files := &stubUploader{failWith: fmt.Errorf("%w: policy", storageinfra.ErrFileRejected)}
@@ -140,6 +141,7 @@ WHERE domain_id = 1 AND profile_id = $1 AND mailbox = 'INBOX' AND uid_validity =
 func TestStaleAssignmentCannotFinishAttachments(t *testing.T) {
 	db := testhelpers.Database(t)
 	testhelpers.Reset(t, db)
+	t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 
 	files := &stubUploader{}
@@ -267,6 +269,7 @@ func TestMarkReadyWaitsForEveryPart(t *testing.T) {
 func TestQuarantineFailureRollsBackTheAttempt(t *testing.T) {
 	db := testhelpers.Database(t)
 	testhelpers.Reset(t, db)
+	t.Cleanup(func() { assertLastMessageInvariant(t, db) })
 	profileID := testhelpers.SeedProfile(t, db, 1, "owner")
 
 	// An email without a mailbox cannot be quarantined: email.inbound_failure

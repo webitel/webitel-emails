@@ -36,6 +36,7 @@ func Project(e event.AttemptSnapshot) (*store.EmailThreadProjection, error) {
 		p.Status = model.EmailThreadStatusProcessed
 		p.CompletedAt = &completedAt
 		p.HandledAgentID, p.HandledUserID = e.AgentID, e.AgentUserID
+		p.ParticipantAgentID, p.ParticipantUserID = e.AgentID, e.AgentUserID
 
 		return p, nil
 	case event.AttemptStateWaiting:
@@ -53,6 +54,11 @@ func Project(e event.AttemptSnapshot) (*store.EmailThreadProjection, error) {
 
 	p.AttemptID, p.AttemptVersion = e.AttemptID, e.AttemptVersion
 	p.AgentID, p.UserID = e.AgentID, e.AgentUserID
+	// Only a state reached by Take proves participation; an offer does not.
+	switch *e.AttemptState {
+	case event.AttemptStateActive, event.AttemptStatePostponed, event.AttemptStateProcessing:
+		p.ParticipantAgentID, p.ParticipantUserID = e.AgentID, e.AgentUserID
+	}
 
 	return p, nil
 }

@@ -56,6 +56,11 @@ storage:
   upload_timeout: 2m
   max_concurrent_uploads: 20
   max_attachment_attempts: 3
+  # Download links of the read API: life (at most 15m), time limit per request
+  # and parallel link requests per request.
+  link_ttl: 5m
+  link_timeout: 5s
+  max_concurrent_links: 8
 
 contacts:
   search_timeout: 5s

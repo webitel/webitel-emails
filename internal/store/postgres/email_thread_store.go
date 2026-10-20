@@ -153,29 +153,26 @@ WHERE domain_id = $1 AND id = $2 AND kind = $3
 	return result.RowsAffected() > 0, nil
 }
 
-// SetContactManually is not limited to the states automatic resolution may write:
-// an operator may correct a resolved Thread as well. The regular kind is still
-// required, so an auto-reply or a bounce never receives a contact.
+// SetContactManually may correct any state; the update repeats the visibility and
+// assignment conditions, so it is the final check. Regular Threads only.
 func (s *emailThreadStore) SetContactManually(
 	ctx context.Context,
-	domainID, threadID int64,
+	domainID, userID, threadID int64,
 	contactID *int64,
 ) (bool, error) {
-	const query = `
-UPDATE email.thread SET
-    contact_id = $4,
-    contact_resolution_state = CASE WHEN $4::bigint IS NULL THEN 'unlinked' ELSE 'resolved' END,
+	query := `
+UPDATE email.thread t SET
+    contact_id = @contact_id,
+    contact_resolution_state = CASE WHEN @contact_id::bigint IS NULL THEN 'unlinked' ELSE 'resolved' END,
     updated_at = now()
-WHERE domain_id = $1 AND id = $2 AND kind = $3`
+WHERE t.id = @thread_id AND ` + visibleThread(model.EmailThreadAssignmentCurrent) + ` AND ` + threadAssigned
 
-	result, err := s.db.Exec(
-		ctx,
-		query,
-		domainID,
-		threadID,
-		string(model.EmailThreadKindRegular),
-		nullableInt64(contactID),
-	)
+	result, err := s.db.Exec(ctx, query, pgx.NamedArgs{
+		"domain_id":  domainID,
+		"user_id":    userID,
+		"thread_id":  threadID,
+		"contact_id": nullableInt64(contactID),
+	})
 	if err != nil {
 		return false, ParseError(err)
 	}

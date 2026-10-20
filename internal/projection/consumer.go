@@ -233,10 +233,15 @@ func (c *Consumer) settle(
 		return c.reject(d, log, "service_thread", errors.New("a service thread is never projected"))
 	case store.EmailThreadProjectionApplied:
 		c.stats.applied(time.Since(snapshot.OccurredAt))
-		log.Debug("attempt snapshot applied", "last_handled_applied", result.HandledApplied)
+		log.Debug("attempt snapshot applied",
+			"last_handled_applied", result.HandledApplied, "participant_recorded", result.ParticipantRecorded)
 	default:
 		c.stats.stale()
-		log.Debug("attempt snapshot is not newer than the thread", "last_handled_applied", result.HandledApplied)
+		log.Debug("attempt snapshot is not newer than the thread",
+			"last_handled_applied", result.HandledApplied, "participant_recorded", result.ParticipantRecorded)
+	}
+	if result.ParticipantRecorded {
+		c.stats.participant()
 	}
 
 	if err := d.Ack(false); err != nil {
@@ -280,6 +285,7 @@ func (c *Consumer) reportLoop(ctx context.Context) {
 			"applied", r.applied,
 			"stale", r.stale,
 			"rejected", r.rejected,
+			"participants_recorded", r.participants,
 			"last_lag", r.lastLag.Round(time.Millisecond),
 			"max_lag", r.maxLag.Round(time.Millisecond),
 		)
@@ -298,6 +304,7 @@ type stats struct {
 
 type report struct {
 	applied, stale, rejected int64
+	participants             int64
 	lastLag, maxLag          time.Duration
 }
 
@@ -313,6 +320,12 @@ func (s *stats) stale() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.report.stale++
+}
+
+func (s *stats) participant() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.report.participants++
 }
 
 func (s *stats) rejected() {

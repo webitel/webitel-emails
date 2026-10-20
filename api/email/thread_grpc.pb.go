@@ -21,6 +21,11 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	EmailThreads_BindEmailThreadContact_FullMethodName   = "/webitel.email.EmailThreads/BindEmailThreadContact"
 	EmailThreads_UnbindEmailThreadContact_FullMethodName = "/webitel.email.EmailThreads/UnbindEmailThreadContact"
+	EmailThreads_ListEmailThreads_FullMethodName         = "/webitel.email.EmailThreads/ListEmailThreads"
+	EmailThreads_LocateEmailThread_FullMethodName        = "/webitel.email.EmailThreads/LocateEmailThread"
+	EmailThreads_ListEmailThreadMessages_FullMethodName  = "/webitel.email.EmailThreads/ListEmailThreadMessages"
+	EmailThreads_LocateEmailThreadMessage_FullMethodName = "/webitel.email.EmailThreads/LocateEmailThreadMessage"
+	EmailThreads_GetEmailAttachmentLink_FullMethodName   = "/webitel.email.EmailThreads/GetEmailAttachmentLink"
 )
 
 // EmailThreadsClient is the client API for EmailThreads service.
@@ -36,6 +41,21 @@ type EmailThreadsClient interface {
 	// UnbindEmailThreadContact removes the contact of a conversation and keeps it
 	// that way: automatic resolution never writes over an unlinked conversation.
 	UnbindEmailThreadContact(ctx context.Context, in *UnbindEmailThreadContactRequest, opts ...grpc.CallOption) (*UnbindEmailThreadContactResponse, error)
+	// ListEmailThreads returns the conversations the caller handles now or took
+	// into work earlier. Nothing else in the domain is listed.
+	ListEmailThreads(ctx context.Context, in *ListEmailThreadsRequest, opts ...grpc.CallOption) (*EmailThreadList, error)
+	// LocateEmailThread returns one conversation visible to the caller, without
+	// its messages. Any other conversation is reported as not found.
+	LocateEmailThread(ctx context.Context, in *LocateEmailThreadRequest, opts ...grpc.CallOption) (*EmailThread, error)
+	// ListEmailThreadMessages returns the complete emails of a visible
+	// conversation; the HTML body is always sanitized.
+	ListEmailThreadMessages(ctx context.Context, in *ListEmailThreadMessagesRequest, opts ...grpc.CallOption) (*EmailMessageList, error)
+	// LocateEmailThreadMessage returns one complete email of a visible
+	// conversation.
+	LocateEmailThreadMessage(ctx context.Context, in *LocateEmailThreadMessageRequest, opts ...grpc.CallOption) (*EmailMessage, error)
+	// GetEmailAttachmentLink returns a short-lived download link to a stored
+	// attachment of a visible email.
+	GetEmailAttachmentLink(ctx context.Context, in *GetEmailAttachmentLinkRequest, opts ...grpc.CallOption) (*GetEmailAttachmentLinkResponse, error)
 }
 
 type emailThreadsClient struct {
@@ -66,6 +86,56 @@ func (c *emailThreadsClient) UnbindEmailThreadContact(ctx context.Context, in *U
 	return out, nil
 }
 
+func (c *emailThreadsClient) ListEmailThreads(ctx context.Context, in *ListEmailThreadsRequest, opts ...grpc.CallOption) (*EmailThreadList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailThreadList)
+	err := c.cc.Invoke(ctx, EmailThreads_ListEmailThreads_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) LocateEmailThread(ctx context.Context, in *LocateEmailThreadRequest, opts ...grpc.CallOption) (*EmailThread, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailThread)
+	err := c.cc.Invoke(ctx, EmailThreads_LocateEmailThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) ListEmailThreadMessages(ctx context.Context, in *ListEmailThreadMessagesRequest, opts ...grpc.CallOption) (*EmailMessageList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailMessageList)
+	err := c.cc.Invoke(ctx, EmailThreads_ListEmailThreadMessages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) LocateEmailThreadMessage(ctx context.Context, in *LocateEmailThreadMessageRequest, opts ...grpc.CallOption) (*EmailMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailMessage)
+	err := c.cc.Invoke(ctx, EmailThreads_LocateEmailThreadMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) GetEmailAttachmentLink(ctx context.Context, in *GetEmailAttachmentLinkRequest, opts ...grpc.CallOption) (*GetEmailAttachmentLinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetEmailAttachmentLinkResponse)
+	err := c.cc.Invoke(ctx, EmailThreads_GetEmailAttachmentLink_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmailThreadsServer is the server API for EmailThreads service.
 // All implementations must embed UnimplementedEmailThreadsServer
 // for forward compatibility.
@@ -79,6 +149,21 @@ type EmailThreadsServer interface {
 	// UnbindEmailThreadContact removes the contact of a conversation and keeps it
 	// that way: automatic resolution never writes over an unlinked conversation.
 	UnbindEmailThreadContact(context.Context, *UnbindEmailThreadContactRequest) (*UnbindEmailThreadContactResponse, error)
+	// ListEmailThreads returns the conversations the caller handles now or took
+	// into work earlier. Nothing else in the domain is listed.
+	ListEmailThreads(context.Context, *ListEmailThreadsRequest) (*EmailThreadList, error)
+	// LocateEmailThread returns one conversation visible to the caller, without
+	// its messages. Any other conversation is reported as not found.
+	LocateEmailThread(context.Context, *LocateEmailThreadRequest) (*EmailThread, error)
+	// ListEmailThreadMessages returns the complete emails of a visible
+	// conversation; the HTML body is always sanitized.
+	ListEmailThreadMessages(context.Context, *ListEmailThreadMessagesRequest) (*EmailMessageList, error)
+	// LocateEmailThreadMessage returns one complete email of a visible
+	// conversation.
+	LocateEmailThreadMessage(context.Context, *LocateEmailThreadMessageRequest) (*EmailMessage, error)
+	// GetEmailAttachmentLink returns a short-lived download link to a stored
+	// attachment of a visible email.
+	GetEmailAttachmentLink(context.Context, *GetEmailAttachmentLinkRequest) (*GetEmailAttachmentLinkResponse, error)
 	mustEmbedUnimplementedEmailThreadsServer()
 }
 
@@ -94,6 +179,21 @@ func (UnimplementedEmailThreadsServer) BindEmailThreadContact(context.Context, *
 }
 func (UnimplementedEmailThreadsServer) UnbindEmailThreadContact(context.Context, *UnbindEmailThreadContactRequest) (*UnbindEmailThreadContactResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnbindEmailThreadContact not implemented")
+}
+func (UnimplementedEmailThreadsServer) ListEmailThreads(context.Context, *ListEmailThreadsRequest) (*EmailThreadList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEmailThreads not implemented")
+}
+func (UnimplementedEmailThreadsServer) LocateEmailThread(context.Context, *LocateEmailThreadRequest) (*EmailThread, error) {
+	return nil, status.Error(codes.Unimplemented, "method LocateEmailThread not implemented")
+}
+func (UnimplementedEmailThreadsServer) ListEmailThreadMessages(context.Context, *ListEmailThreadMessagesRequest) (*EmailMessageList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEmailThreadMessages not implemented")
+}
+func (UnimplementedEmailThreadsServer) LocateEmailThreadMessage(context.Context, *LocateEmailThreadMessageRequest) (*EmailMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method LocateEmailThreadMessage not implemented")
+}
+func (UnimplementedEmailThreadsServer) GetEmailAttachmentLink(context.Context, *GetEmailAttachmentLinkRequest) (*GetEmailAttachmentLinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetEmailAttachmentLink not implemented")
 }
 func (UnimplementedEmailThreadsServer) mustEmbedUnimplementedEmailThreadsServer() {}
 func (UnimplementedEmailThreadsServer) testEmbeddedByValue()                      {}
@@ -152,6 +252,96 @@ func _EmailThreads_UnbindEmailThreadContact_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmailThreads_ListEmailThreads_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEmailThreadsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).ListEmailThreads(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_ListEmailThreads_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).ListEmailThreads(ctx, req.(*ListEmailThreadsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_LocateEmailThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocateEmailThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).LocateEmailThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_LocateEmailThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).LocateEmailThread(ctx, req.(*LocateEmailThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_ListEmailThreadMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEmailThreadMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).ListEmailThreadMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_ListEmailThreadMessages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).ListEmailThreadMessages(ctx, req.(*ListEmailThreadMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_LocateEmailThreadMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocateEmailThreadMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).LocateEmailThreadMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_LocateEmailThreadMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).LocateEmailThreadMessage(ctx, req.(*LocateEmailThreadMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_GetEmailAttachmentLink_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEmailAttachmentLinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).GetEmailAttachmentLink(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_GetEmailAttachmentLink_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).GetEmailAttachmentLink(ctx, req.(*GetEmailAttachmentLinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmailThreads_ServiceDesc is the grpc.ServiceDesc for EmailThreads service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -166,6 +356,26 @@ var EmailThreads_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UnbindEmailThreadContact",
 			Handler:    _EmailThreads_UnbindEmailThreadContact_Handler,
+		},
+		{
+			MethodName: "ListEmailThreads",
+			Handler:    _EmailThreads_ListEmailThreads_Handler,
+		},
+		{
+			MethodName: "LocateEmailThread",
+			Handler:    _EmailThreads_LocateEmailThread_Handler,
+		},
+		{
+			MethodName: "ListEmailThreadMessages",
+			Handler:    _EmailThreads_ListEmailThreadMessages_Handler,
+		},
+		{
+			MethodName: "LocateEmailThreadMessage",
+			Handler:    _EmailThreads_LocateEmailThreadMessage_Handler,
+		},
+		{
+			MethodName: "GetEmailAttachmentLink",
+			Handler:    _EmailThreads_GetEmailAttachmentLink_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
