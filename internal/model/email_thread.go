@@ -19,6 +19,7 @@ const (
 	EmailThreadStatusNew         EmailThreadStatus = "new"
 	EmailThreadStatusDistributed EmailThreadStatus = "distributed"
 	EmailThreadStatusInProgress  EmailThreadStatus = "in_progress"
+	EmailThreadStatusPostponed   EmailThreadStatus = "postponed"
 	EmailThreadStatusProcessed   EmailThreadStatus = "processed"
 )
 

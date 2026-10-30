@@ -99,6 +99,13 @@ start the Flow of `flow_id`; an event without `flow_id` is accepted with no Flow
 - A Flow may still start twice if `flow_manager` stops between starting it and
   recording the event as accepted. Flows receive `email_event_id`, and steps
   with side effects, such as joining a queue, must be idempotent by it.
+- When `call_center` reopens a Thread without an active attempt, the Flow has
+  `email_route_timeout` (60 seconds by default) to choose a queue with
+  `joinQueue`; afterwards `flow_manager` joins the queue of the last finished
+  attempt, given to the Flow as `cc_fallback_queue_id`, and a late `joinQueue`
+  fails with `email_route.window_closed`. Email Flows should call `joinQueue` as
+  early as possible. Such an event starts its Flow again only before the
+  deadline, so a Flow interrupted after the join does not repeat its later steps.
 
 ## Rollout
 
@@ -108,8 +115,147 @@ Publishing is mandatory, so events wait in the Outbox until their queue exists:
 2. start `flow_manager` with `EMAIL_EVENTS=true`;
 3. check that the exchanges, both queues, their bindings and a consumer of
    `flow.email.inbound` exist;
-4. only then enable the relay and polling of email-service.
+4. only then enable Email Profiles, which starts polling. In production keep
+   them disabled until the conditions of the "Inbound email" section of the
+   README are met.
 
 Until step 2 the relay logs `unroutable` and retries without spending attempts.
 For high availability enable `EMAIL_EVENTS=true` on every `flow_manager`
 instance.
+
+## `cc.email.attempt.snapshot`, schema 1
+
+Consumed by this service. `call_center` writes the full Email attempt to its
+`cc_email_attempt_outbox` in the transaction of every transition, and a
+publisher sends each row here. The Thread keeps a versioned projection of it:
+status, queue, current and last agent, `postponed_until` and the current attempt
+version. `call_center` stays the owner of these data.
+
+| Property | Value |
+|---|---|
+| Exchange | `cc.email.events` (topic) |
+| Routing key | `cc.email.attempt.snapshot.v1` |
+| Content type | `application/json` |
+
+Adding a field keeps `schema_version`; changing or removing one bumps it and the
+routing key suffix. Consumers must ignore unknown fields. Messages are
+persistent and published with confirms and `mandatory`, with the headers
+`x-event-id`, `x-event-type` and `x-schema-version`.
+
+### Topology
+
+| Object | Declared by | Parameters |
+|---|---|---|
+| Exchange `cc.email.events` | call_center, email-service | `topic` |
+| Queue `email.thread.projection` | email-service | `x-queue-type = quorum`, `x-dead-letter-exchange = cc.email.events.dlx`, `x-delivery-limit` (default 20); bound to `cc.email.events` with `cc.email.attempt.snapshot.v1` |
+| Exchange `cc.email.events.dlx` | email-service | `fanout` |
+| Queue `email.thread.projection.dlq` | email-service | `x-queue-type = quorum`; bound to `cc.email.events.dlx` without a routing key |
+
+Both sides redeclare their objects after a reconnect until it succeeds.
+
+### Envelope
+
+Every field is present; a missing value is an explicit `null`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `event_id` | UUID | UUIDv5 of the event type and `projection_version`: a republished row keeps it |
+| `event_type` | string | `cc.email.attempt.snapshot` |
+| `schema_version` | int | `1` |
+| `occurred_at` | RFC 3339, UTC | Time of the transition |
+| `domain_id` | int64 | |
+| `thread_id` | int64 | `email.thread.id` |
+| `projection_version` | int64 | `sequence` of the outbox row; orders the snapshots of a Thread, gaps are normal |
+| `transition` | string | Transition of the attempt, or `inbound_reopened` |
+| `source` | string | `engine`, `flow` or `system` |
+| `causation_id` | string or `null` | `email_event_id` of the email that caused it, for tracing |
+| `attempt_id` | int64 or `null` | |
+| `attempt_version` | int64 or `null` | Version of the attempt for operator commands; starts at 0 for every attempt |
+| `attempt_state` | string or `null` | `waiting`, `offering`, `active`, `postponed`, `processing` or `leaving` |
+| `result` | string or `null` | Only for `leaving`: `processed` or `processing_timeout` |
+| `queue_id` | int64 or `null` | |
+| `agent_id` | int64 or `null` | `cc_agent.id` |
+| `agent_user_id` | int64 or `null` | User of the agent, set together with `agent_id` |
+| `postponed_until` | RFC 3339 or `null` | Only for `postponed` |
+
+No email content, addresses or attachments are sent.
+
+### Validation
+
+A snapshot is rejected to the dead letter queue, never mapped to a guessed
+status, when any of these fails:
+
+- `event_id` is set and equals a non-empty `x-event-id` header; type and schema
+  are known; `domain_id`, `thread_id` and `projection_version` are positive;
+  `transition`, `attempt_state`, `result` and `source` are known values;
+- `agent_id` and `agent_user_id` are both set or both `null`;
+- `inbound_reopened`: every attempt field, `result`, `agent_*` and
+  `postponed_until` are `null`; `queue_id` may be `null`;
+- any other transition: positive `attempt_id` and `queue_id`, non-negative
+  `attempt_version`, `result` only for `leaving`, `postponed_until` exactly for
+  `postponed`, no agent for `waiting`.
+
+A new `result`, such as that of a transfer, is unknown until this service maps
+it, so this service is released before `call_center` sends it.
+
+### Mapping to the Thread
+
+A snapshot applies only to an existing `regular` Thread of the same domain and
+only when its `projection_version` is greater than the stored one; a repeated or
+older snapshot changes nothing. Delivery order does not matter.
+
+| Snapshot | Thread status | Current agent | `postponed_until` | `completed_at` |
+|---|---|---|---|---|
+| `waiting` | `new` | `null` | `null` | `null` |
+| `offering` | `distributed` | agent | `null` | `null` |
+| `active` | `in_progress` | agent | `null` | `null` |
+| `postponed` | `postponed` | agent | snapshot value | `null` |
+| `processing` | `in_progress` | agent | `null` | `null` |
+| `leaving` with `processed` or `processing_timeout` | `processed` | `null` | `null` | `occurred_at` |
+| `inbound_reopened` | `new` | `null` | `null` | `null` |
+
+`queue_id` is taken from an attempt snapshot and kept after the attempt ends. The
+current attempt and its version are cleared by `leaving` and by the marker.
+
+`inbound_reopened` is written by `call_center` when a new inbound email finds
+no active attempt of the Thread. It opens the Thread as `new` without an
+attempt, so an email that no queue receives stays visible. It updates
+`queue_id` only when it carries one. Its `projection_version` is above the final
+snapshot of the previous attempt and below the `created` snapshot of the next
+one, so a late final snapshot cannot close the Thread again.
+
+The last agent who finished an attempt is kept with its own version: a `leaving`
+snapshot sets it when its `projection_version` is above `last_handled_version`,
+even if the projection already applied a newer snapshot. The marker and a new
+`waiting` attempt keep it.
+
+Other consumers of this event, such as delivery to Workspace, must expect
+`inbound_reopened` without an attempt.
+
+### Consumer: email-service
+
+Every instance consumes `email.thread.projection`, apart from leadership and
+mailbox assignment, with the prefetch of `thread_projection.prefetch`. It
+declares the topology above before each subscription and again after a lost
+connection or channel, with a growing pause.
+
+- A snapshot and the last handled agent are written in one transaction, and the
+  delivery is acknowledged only after it commits.
+- A repeated or older snapshot is acknowledged without a change.
+- The dead letter queue receives snapshots that no retry can apply: an invalid
+  or unknown envelope, a Thread that does not exist in that domain, a service
+  Thread, values the database refuses, and deliveries past `x-delivery-limit`
+  (`thread_projection.delivery_limit`, which cannot change once the queue exists).
+- A database outage keeps the delivery and retries it until it succeeds, the
+  service stops or the channel closes; it is never dead-lettered.
+- The applied, stale and rejected counts and the lag (`now - occurred_at`) are
+  logged every `thread_projection.report_interval`; payloads are never logged.
+
+### Rollout
+
+Deploy email-service with its consumer first. Then apply the `call_center`
+migrations `email_status_sync.sql` and `email_route.sql`, deploy every
+`call_center` node with the snapshot publisher off, and only then `flow_manager`.
+Enable the publisher last, as the `call_center` README says; until then
+snapshots wait in its outbox. Wake-ups recorded before the migration get no
+fallback queue.

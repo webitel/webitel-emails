@@ -206,6 +206,10 @@ func TestConfigValidate(t *testing.T) {
 			LeaseDuration: time.Minute, RetryInitialInterval: time.Second, RetryMaxInterval: 30 * time.Second,
 			Retention: 72 * time.Hour, CleanupInterval: time.Hour, CleanupBatch: 1000,
 		},
+		ThreadProjection: ThreadProjectionConfig{
+			Prefetch: 20, DeliveryLimit: 20, RetryInitialInterval: time.Second,
+			RetryMaxInterval: 30 * time.Second, ReportInterval: time.Minute,
+		},
 		Storage: StorageConfig{
 			UploadTimeout:         2 * time.Minute,
 			MaxConcurrentUploads:  20,

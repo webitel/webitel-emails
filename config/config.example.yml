@@ -79,3 +79,10 @@ outbox:
   retention: 72h
   cleanup_interval: 1h
   cleanup_batch: 1000
+
+thread_projection:
+  prefetch: 20
+  delivery_limit: 20
+  retry_initial_interval: 1s
+  retry_max_interval: 30s
+  report_interval: 1m
