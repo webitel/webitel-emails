@@ -61,10 +61,9 @@ type EmailThreadStore interface {
 		state model.EmailContactResolutionState,
 		contactID *int64,
 	) (bool, error)
-	// SetContactManually stores a decision of an operator, which outranks every
-	// automatic outcome. A service Thread is never touched; false means the Thread
-	// does not exist in this domain or is a service one.
-	SetContactManually(ctx context.Context, domainID, threadID int64, contactID *int64) (bool, error)
+	// SetContactManually stores an operator decision while the user is assigned by the
+	// latest projection; false means not applied, and the caller tells why.
+	SetContactManually(ctx context.Context, domainID, userID, threadID int64, contactID *int64) (bool, error)
 	// FirstSenderAddress returns the normalized From address of the earliest
 	// message of a Thread, which is the address its contact is resolved by.
 	// An empty result means the Thread has no usable sender address.

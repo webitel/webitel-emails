@@ -207,7 +207,7 @@ func TestManualContactDecisionWinsAutomaticResolution(t *testing.T) {
 		},
 		beforeReturn: func() {
 			applied, err := fake.EmailThreadStore().SetContactManually(
-				context.Background(), 1, fake.threads[0].ID, &manualID,
+				context.Background(), 1, 70, fake.threads[0].ID, &manualID,
 			)
 			if err != nil || !applied {
 				t.Fatalf("manual bind = %v, %v", applied, err)

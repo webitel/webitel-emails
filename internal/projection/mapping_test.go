@@ -99,3 +99,44 @@ func TestProject(t *testing.T) {
 		}
 	})
 }
+
+func TestProjectParticipant(t *testing.T) {
+	proves := map[string]bool{
+		event.AttemptStateWaiting:    false,
+		event.AttemptStateOffering:   false,
+		event.AttemptStateActive:     true,
+		event.AttemptStatePostponed:  true,
+		event.AttemptStateProcessing: true,
+		event.AttemptStateLeaving:    true,
+	}
+	for state, want := range proves {
+		e := snapshot(state)
+		if err := e.Validate(); err != nil {
+			t.Fatalf("%s: invalid fixture: %v", state, err)
+		}
+		p, err := Project(e)
+		if err != nil {
+			t.Fatalf("%s: %v", state, err)
+		}
+		got := p.ParticipantUserID != nil && p.ParticipantAgentID != nil
+		if got != want {
+			t.Errorf("%s: participant recorded = %v, want %v", state, got, want)
+		}
+		if got && (*p.ParticipantUserID != 70 || *p.ParticipantAgentID != 7) {
+			t.Errorf("%s: participant %d/%d", state, *p.ParticipantAgentID, *p.ParticipantUserID)
+		}
+	}
+
+	t.Run("the marker records no participant", func(t *testing.T) {
+		e := snapshot(event.AttemptStateWaiting)
+		e.Transition, e.Source, e.AttemptID, e.AttemptVersion, e.AttemptState, e.QueueID =
+			event.TransitionInboundReopened, "system", nil, nil, nil, nil
+		p, err := Project(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ParticipantUserID != nil || p.ParticipantAgentID != nil {
+			t.Errorf("projection %+v", p)
+		}
+	})
+}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/textproto"
-	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +20,7 @@ import (
 	"github.com/k3a/html2text"
 
 	"github.com/webitel/webitel-emails/config"
+	"github.com/webitel/webitel-emails/internal/emailhtml"
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
@@ -294,10 +294,11 @@ func parseEmailPart(part *gomessage.Entity, contentType, disposition string) (mo
 }
 
 func finalizeEmailParts(parsed *model.ParsedEmail) {
+	refs := imageReferences(parsed.HTMLBody)
 	for i := range parsed.Parts {
 		part := &parsed.Parts[i]
 		isImage := strings.HasPrefix(part.ContentType, "image/")
-		referenced := isImage && htmlReferencesCID(parsed.HTMLBody, part.ContentID)
+		referenced := isImage && referencesContentID(refs, part.ContentID)
 
 		switch {
 		case referenced:
@@ -312,36 +313,25 @@ func finalizeEmailParts(parsed *model.ParsedEmail) {
 	}
 }
 
-func htmlReferencesCID(html, contentID string) bool {
-	if html == "" || contentID == "" {
-		return false
+// imageReferences returns the "cid:" image references exactly as the read API finds
+// them, so a part is inline only if it will be shown.
+func imageReferences(htmlBody string) []string {
+	if htmlBody == "" {
+		return nil
+	}
+	doc, err := emailhtml.Sanitize(htmlBody)
+	if err != nil {
+		return nil
 	}
 
-	lowerHTML := strings.ToLower(html)
-	for offset := 0; offset < len(html); {
-		index := strings.Index(lowerHTML[offset:], "cid:")
-		if index < 0 {
-			return false
-		}
+	return doc.ContentIDReferences()
+}
 
-		start := offset + index + len("cid:")
-		end := start
-		for end < len(html) && !strings.ContainsRune("\"'<> ()\t\r\n", rune(html[end])) {
-			end++
-		}
-
-		value := html[start:end]
-		if value == contentID {
+func referencesContentID(refs []string, contentID string) bool {
+	for _, ref := range refs {
+		if emailhtml.MatchesContentID(ref, contentID) {
 			return true
 		}
-		if decoded, err := url.PathUnescape(value); err == nil && decoded == contentID {
-			return true
-		}
-		if decoded, err := url.QueryUnescape(value); err == nil && decoded == contentID {
-			return true
-		}
-
-		offset = start
 	}
 
 	return false

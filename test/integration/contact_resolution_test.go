@@ -39,14 +39,21 @@ func TestContactResolutionStoreUsesFirstMessageAndProtectsTenant(t *testing.T) {
 		t.Fatalf("foreign-domain first sender = %q, %v; want empty", address, err)
 	}
 
+	// A manual decision needs the agent assigned after Take by the projection.
+	assignThread(t, db, threadID, "in_progress", 70)
+
 	manualID := int64(42)
-	applied, err := store.SetContactManually(ctx, 2, threadID, &manualID)
+	applied, err := store.SetContactManually(ctx, 2, 70, threadID, &manualID)
 	if err != nil || applied {
 		t.Fatalf("foreign-domain manual bind = %v, %v; want false", applied, err)
 	}
+	applied, err = store.SetContactManually(ctx, 1, 71, threadID, &manualID)
+	if err != nil || applied {
+		t.Fatalf("manual bind by another user = %v, %v; want false", applied, err)
+	}
 	assertStoredContact(t, db, threadID, nil, model.EmailContactResolutionPending)
 
-	applied, err = store.SetContactManually(ctx, 1, threadID, &manualID)
+	applied, err = store.SetContactManually(ctx, 1, 70, threadID, &manualID)
 	if err != nil || !applied {
 		t.Fatalf("manual bind = %v, %v; want true", applied, err)
 	}

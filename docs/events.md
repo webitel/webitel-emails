@@ -202,7 +202,9 @@ it, so this service is released before `call_center` sends it.
 
 A snapshot applies only to an existing `regular` Thread of the same domain and
 only when its `projection_version` is greater than the stored one; a repeated or
-older snapshot changes nothing. Delivery order does not matter.
+older snapshot leaves the projection as it is, but may still update
+`last_handled_*` and the participant journal (see below). Delivery order does
+not matter.
 
 | Snapshot | Thread status | Current agent | `postponed_until` | `completed_at` |
 |---|---|---|---|---|
@@ -229,6 +231,17 @@ snapshot sets it when its `projection_version` is above `last_handled_version`,
 even if the projection already applied a newer snapshot. The marker and a new
 `waiting` attempt keep it.
 
+A snapshot that proves its agent took the Thread into work (`active`,
+`postponed`, `processing`, or `leaving` with an agent) adds the agent's user to
+the participant journal `email.thread_participant`, in the same transaction and
+whether or not the projection applied the snapshot. The journal is a set: rows
+are only added, their versions and times only widen, so the order and repetition
+of deliveries do not matter. `waiting`, `offering` and the marker never add a
+row, so an offer that was not taken gives no history. Only a participant or the
+current agent of a Thread may read it through the read API; `last_handled_*` is
+history, not access. Authors of outbound emails will join the journal with
+outbound email support.
+
 Other consumers of this event, such as delivery to Workspace, must expect
 `inbound_reopened` without an attempt.
 
@@ -239,17 +252,41 @@ mailbox assignment, with the prefetch of `thread_projection.prefetch`. It
 declares the topology above before each subscription and again after a lost
 connection or channel, with a growing pause.
 
-- A snapshot and the last handled agent are written in one transaction, and the
-  delivery is acknowledged only after it commits.
-- A repeated or older snapshot is acknowledged without a change.
+- A snapshot, the last handled agent and the participant are written in one
+  transaction, and the delivery is acknowledged only after it commits.
+- A repeated or older snapshot is acknowledged without changing the projection;
+  `last_handled_*` and the participant journal are still updated by their own
+  rules.
 - The dead letter queue receives snapshots that no retry can apply: an invalid
   or unknown envelope, a Thread that does not exist in that domain, a service
   Thread, values the database refuses, and deliveries past `x-delivery-limit`
   (`thread_projection.delivery_limit`, which cannot change once the queue exists).
 - A database outage keeps the delivery and retries it until it succeeds, the
   service stops or the channel closes; it is never dead-lettered.
-- The applied, stale and rejected counts and the lag (`now - occurred_at`) are
-  logged every `thread_projection.report_interval`; payloads are never logged.
+- The applied, stale and rejected counts, the recorded participants and the lag
+  (`now - occurred_at`) are logged every `thread_projection.report_interval`;
+  payloads are never logged.
+
+### Changing the email-service version
+
+All instances share `email.thread.projection`, and a version without the
+participant journal acknowledges snapshots without recording participants;
+those snapshots never come again. So old and new instances must never consume
+at the same time, both on upgrade and on rollback:
+
+1. Stop the snapshot publisher on every `call_center` node
+   (`EMAIL_ATTEMPT_PUBLISHER=false`, read at start, so the nodes restart).
+   Snapshots wait in its outbox.
+2. Wait until no node publishes and the queue holds `ready = 0` and
+   `unacked = 0`. On rollback the new version drains it.
+3. Replace every instance.
+4. Start the publisher again only once the new version runs everywhere; keep it
+   stopped while an old version runs.
+
+Before read access is granted after the journal arrives, run the check of
+[participant-backfill.md](participant-backfill.md). A rollback keeps the
+journal table; dropping it needs a separate decision and a backup, since the
+backfill cannot rebuild it completely.
 
 ### Rollout
 

@@ -163,6 +163,61 @@ var WebitelAPI = WebitelServicesInfo{
 					},
 				},
 			},
+			"ListEmailThreads": WebitelMethod{
+				Access: 1,
+				Input:  "ListEmailThreadsRequest",
+				Output: "EmailThreadList",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads",
+						Method: "GET",
+					},
+				},
+			},
+			"LocateEmailThread": WebitelMethod{
+				Access: 1,
+				Input:  "LocateEmailThreadRequest",
+				Output: "EmailThread",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}",
+						Method: "GET",
+					},
+				},
+			},
+			"ListEmailThreadMessages": WebitelMethod{
+				Access: 1,
+				Input:  "ListEmailThreadMessagesRequest",
+				Output: "EmailMessageList",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages",
+						Method: "GET",
+					},
+				},
+			},
+			"LocateEmailThreadMessage": WebitelMethod{
+				Access: 1,
+				Input:  "LocateEmailThreadMessageRequest",
+				Output: "EmailMessage",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages/{message_id}",
+						Method: "GET",
+					},
+				},
+			},
+			"GetEmailAttachmentLink": WebitelMethod{
+				Access: 1,
+				Input:  "GetEmailAttachmentLinkRequest",
+				Output: "GetEmailAttachmentLinkResponse",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages/{message_id}/attachments/{attachment_id}/link",
+						Method: "GET",
+					},
+				},
+			},
 		},
 	},
 }

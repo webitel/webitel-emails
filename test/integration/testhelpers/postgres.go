@@ -140,7 +140,9 @@ CREATE TABLE IF NOT EXISTS directory.wbt_user (
     id       bigint PRIMARY KEY,
     name     text NOT NULL DEFAULT '',
     username text NOT NULL DEFAULT ''
-);`
+);
+-- The read API joins users within the domain of a Thread.
+ALTER TABLE directory.wbt_user ADD COLUMN IF NOT EXISTS dc bigint NOT NULL DEFAULT 0;`
 
 	if _, err := db.Exec(ctx, directoryStub); err != nil {
 		return fmt.Errorf("directory stub: %w", err)

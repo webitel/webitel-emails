@@ -23,6 +23,30 @@ const (
 	EmailThreadStatusProcessed   EmailThreadStatus = "processed"
 )
 
+// EmailThreadAssignment selects Threads by the user's relation to them. It never
+// widens access beyond the user's own Threads.
+type EmailThreadAssignment string
+
+// Email Thread assignment views.
+const (
+	// EmailThreadAssignmentCurrent: the user is the current agent.
+	EmailThreadAssignmentCurrent EmailThreadAssignment = "current"
+	// EmailThreadAssignmentHistory: the user took the Thread into work earlier
+	// and is not its current agent.
+	EmailThreadAssignmentHistory EmailThreadAssignment = "history"
+	// EmailThreadAssignmentAll: current and history Threads of the user.
+	EmailThreadAssignmentAll EmailThreadAssignment = "all"
+)
+
+// EmailThreadAccess is the user's relation to a visible Thread.
+type EmailThreadAccess string
+
+// Relations of a user to a visible Thread.
+const (
+	EmailThreadAccessCurrent EmailThreadAccess = "current"
+	EmailThreadAccessHistory EmailThreadAccess = "history"
+)
+
 // EmailContactResolutionState tells apart the reasons a Thread has no contact.
 type EmailContactResolutionState string
 

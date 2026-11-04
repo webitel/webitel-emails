@@ -36,6 +36,11 @@ type EmailThreadProjection struct {
 	// HandledAgentID and HandledUserID are set only by a finished attempt with an agent.
 	HandledAgentID *int64
 	HandledUserID  *int64
+
+	// ParticipantAgentID and ParticipantUserID are set by a snapshot that proves Take
+	// (active, postponed, processing or finished with an agent), never by an offer.
+	ParticipantAgentID *int64
+	ParticipantUserID  *int64
 }
 
 // EmailThreadProjectionOutcome tells what applying a snapshot did.
@@ -57,6 +62,9 @@ type EmailThreadProjectionResult struct {
 	Outcome EmailThreadProjectionOutcome
 	// HandledApplied reports that the last handled agent changed, even for a stale snapshot.
 	HandledApplied bool
+	// ParticipantRecorded reports that the participant journal gained or refined
+	// a row, even for a stale snapshot.
+	ParticipantRecorded bool
 }
 
 // EmailThreadProjectionStore applies attempt snapshots to Threads. Only a

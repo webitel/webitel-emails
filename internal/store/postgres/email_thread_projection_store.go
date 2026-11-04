@@ -94,6 +94,14 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 		result.HandledApplied = tag.RowsAffected() == 1
 	}
 
+	if p.ParticipantUserID != nil && p.ParticipantAgentID != nil {
+		recorded, err := recordParticipant(ctx, tx, p)
+		if err != nil {
+			return result, err
+		}
+		result.ParticipantRecorded = recorded
+	}
+
 	if applied {
 		result.Outcome = store.EmailThreadProjectionApplied
 
@@ -116,6 +124,37 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 	}
 
 	return result, nil
+}
+
+// recordParticipant adds the agent of a Take-proving snapshot to the journal of a
+// regular Thread; versions and times only widen, so order does not matter.
+func recordParticipant(ctx context.Context, tx pgx.Tx, p *store.EmailThreadProjection) (bool, error) {
+	const record = `
+INSERT INTO email.thread_participant AS tp (
+    domain_id, thread_id, user_id, agent_id,
+    first_version, last_version, first_participated_at, last_participated_at)
+SELECT t.domain_id, t.id, $3, $4, $5, $5, $6, $6
+FROM email.thread t
+WHERE t.domain_id = $1 AND t.id = $2 AND t.kind = 'regular'
+ON CONFLICT (domain_id, thread_id, user_id) DO UPDATE SET
+    agent_id = CASE WHEN EXCLUDED.last_version > coalesce(tp.last_version, 0)
+        THEN EXCLUDED.agent_id ELSE tp.agent_id END,
+    first_version = LEAST(tp.first_version, EXCLUDED.first_version),
+    last_version = GREATEST(tp.last_version, EXCLUDED.last_version),
+    first_participated_at = LEAST(tp.first_participated_at, EXCLUDED.first_participated_at),
+    last_participated_at = GREATEST(tp.last_participated_at, EXCLUDED.last_participated_at),
+    updated_at = now()
+WHERE tp.first_version IS NULL
+   OR EXCLUDED.first_version < tp.first_version
+   OR EXCLUDED.last_version > tp.last_version`
+
+	tag, err := tx.Exec(ctx, record,
+		p.DomainID, p.ThreadID, p.ParticipantUserID, p.ParticipantAgentID, p.Version, p.OccurredAt)
+	if err != nil {
+		return false, projectionError("record participant", err)
+	}
+
+	return tag.RowsAffected() == 1, nil
 }
 
 // projectionError marks data and constraint errors as permanent; anything else

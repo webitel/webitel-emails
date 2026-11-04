@@ -259,9 +259,11 @@ func (f fakeThreadStore) ResolveContact(
 	return false, nil
 }
 
+// SetContactManually ignores the user: the fake models no attempt projection,
+// and the assignment condition is covered by the PostgreSQL store tests.
 func (f fakeThreadStore) SetContactManually(
 	_ context.Context,
-	domainID, threadID int64,
+	domainID, _, threadID int64,
 	contactID *int64,
 ) (bool, error) {
 	f.record("set_contact_manually")

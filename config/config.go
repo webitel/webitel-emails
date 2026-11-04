@@ -91,13 +91,25 @@ type ContactsConfig struct {
 	MaxConcurrentSearches int           `mapstructure:"max_concurrent_searches"`
 }
 
-// StorageConfig tunes attachment uploads to the storage service.
+// StorageConfig tunes attachment uploads to the storage service and the links
+// the read API issues to stored files.
 type StorageConfig struct {
 	UploadTimeout        time.Duration `mapstructure:"upload_timeout"`
 	MaxConcurrentUploads int           `mapstructure:"max_concurrent_uploads"`
 	// Attempts to finish the attachments of one email before it is quarantined.
 	MaxAttachmentAttempts int32 `mapstructure:"max_attachment_attempts"`
+
+	// LinkTTL is how long an issued download link works; at most MaxLinkTTL.
+	LinkTTL time.Duration `mapstructure:"link_ttl"`
+	// LinkTimeout bounds getting the links of one request from storage.
+	LinkTimeout time.Duration `mapstructure:"link_timeout"`
+	// MaxConcurrentLinks bounds the link requests of one read request.
+	MaxConcurrentLinks int `mapstructure:"max_concurrent_links"`
 }
+
+// MaxLinkTTL is the longest life of a download link: a link works for anyone
+// who has it, so it must expire soon.
+const MaxLinkTTL = 15 * time.Minute
 
 // MIMEConfig limits the decoded email content kept by the MIME parser.
 type MIMEConfig struct {
@@ -234,6 +246,9 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("storage.upload_timeout", 2*time.Minute, "maximum duration of one attachment upload to storage")
 	flags.Int("storage.max_concurrent_uploads", 20, "maximum attachment uploads to storage running at the same time")
 	flags.Int32("storage.max_attachment_attempts", 3, "attempts to upload the attachments of one email before it is quarantined")
+	flags.Duration("storage.link_ttl", 5*time.Minute, "how long a download link to a stored file works, at most 15m")
+	flags.Duration("storage.link_timeout", 5*time.Second, "maximum time to get the file links of one read request from storage")
+	flags.Int("storage.max_concurrent_links", 8, "maximum link requests to storage running at the same time for one read request")
 
 	flags.Duration("contacts.search_timeout", 5*time.Second, "maximum duration of one contact search in go.webitel.app")
 	flags.Int("contacts.max_concurrent_searches", 20, "maximum contact searches running at the same time")
@@ -381,6 +396,15 @@ func (c StorageConfig) validate() error {
 	}
 	if c.MaxAttachmentAttempts < 1 {
 		return fmt.Errorf("config: storage.max_attachment_attempts must be at least 1")
+	}
+	if c.LinkTTL <= 0 || c.LinkTTL > MaxLinkTTL {
+		return fmt.Errorf("config: storage.link_ttl must be positive and at most %s", MaxLinkTTL)
+	}
+	if c.LinkTimeout <= 0 {
+		return fmt.Errorf("config: storage.link_timeout must be positive")
+	}
+	if c.MaxConcurrentLinks < 1 {
+		return fmt.Errorf("config: storage.max_concurrent_links must be at least 1")
 	}
 
 	return nil

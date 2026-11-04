@@ -38,7 +38,8 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 		t.Errorf("pubsub.driver = %q, want rabbitmq", cfg.Pubsub.Driver)
 	}
 	if cfg.Storage.UploadTimeout != 2*time.Minute || cfg.Storage.MaxConcurrentUploads != 20 ||
-		cfg.Storage.MaxAttachmentAttempts != 3 {
+		cfg.Storage.MaxAttachmentAttempts != 3 || cfg.Storage.LinkTTL != 5*time.Minute ||
+		cfg.Storage.LinkTimeout != 5*time.Second || cfg.Storage.MaxConcurrentLinks != 8 {
 		t.Errorf("storage defaults = %+v", cfg.Storage)
 	}
 	if cfg.Contacts.SearchTimeout != 5*time.Second || cfg.Contacts.MaxConcurrentSearches != 20 {
@@ -214,6 +215,9 @@ func TestConfigValidate(t *testing.T) {
 			UploadTimeout:         2 * time.Minute,
 			MaxConcurrentUploads:  20,
 			MaxAttachmentAttempts: 3,
+			LinkTTL:               5 * time.Minute,
+			LinkTimeout:           5 * time.Second,
+			MaxConcurrentLinks:    8,
 		},
 	}
 
@@ -233,6 +237,10 @@ func TestConfigValidate(t *testing.T) {
 		{name: "missing pubsub host", mutate: func(c *Config) { c.Pubsub.URL = "amqp:///" }, wantErr: "include a host"},
 		{name: "invalid attachment size", mutate: func(c *Config) { c.MIME.MaxAttachmentSize = 0 }, wantErr: "mime.max_attachment_size"},
 		{name: "invalid total attachment size", mutate: func(c *Config) { c.MIME.MaxAttachmentsTotalSize = 1 }, wantErr: "mime.max_attachments_total_size"},
+		{name: "link ttl above the maximum", mutate: func(c *Config) { c.Storage.LinkTTL = MaxLinkTTL + time.Second }, wantErr: "storage.link_ttl"},
+		{name: "zero link ttl", mutate: func(c *Config) { c.Storage.LinkTTL = 0 }, wantErr: "storage.link_ttl"},
+		{name: "zero link timeout", mutate: func(c *Config) { c.Storage.LinkTimeout = 0 }, wantErr: "storage.link_timeout"},
+		{name: "zero concurrent links", mutate: func(c *Config) { c.Storage.MaxConcurrentLinks = 0 }, wantErr: "storage.max_concurrent_links"},
 		{name: "invalid attachment count", mutate: func(c *Config) { c.MIME.MaxAttachments = 0 }, wantErr: "mime.max_attachments"},
 	}
 
