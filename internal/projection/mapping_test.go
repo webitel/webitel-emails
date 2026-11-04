@@ -67,6 +67,24 @@ func TestProject(t *testing.T) {
 		}
 	})
 
+	t.Run("a transfer leaves the thread new for the sender", func(t *testing.T) {
+		e := snapshot(event.AttemptStateLeaving)
+		e.Transition, e.Result = event.TransitionTransferred, ptr(event.AttemptResultTransfer)
+		e.ActorUserID, e.Comment, e.TransferToQueueID = ptr(int64(70)), ptr("to sales"), ptr(int64(4))
+		if err := e.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		p, err := Project(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Status != model.EmailThreadStatusNew || p.CompletedAt != nil || p.AttemptID != nil || p.UserID != nil ||
+			*p.HandledUserID != 70 || *p.ParticipantUserID != 70 || *p.Action.Comment != "to sales" ||
+			*p.Action.TransferToQueueID != 4 || *p.Action.ActorUserID != 70 {
+			t.Errorf("projection %+v", p)
+		}
+	})
+
 	t.Run("processing timeout also closes the thread", func(t *testing.T) {
 		e := snapshot(event.AttemptStateLeaving)
 		e.Transition, e.Result = "processing_timeout", ptr(event.AttemptResultProcessingTimeout)

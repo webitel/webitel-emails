@@ -45,6 +45,7 @@ var Module = fx.Module(
 			NewEmailThreadProjectionStore,
 			fx.From(new(*pgxpool.Pool)),
 			fx.As(new(store.EmailThreadProjectionStore)),
+			fx.As(new(store.EmailThreadActionCleaner)),
 		),
 		fx.Annotate(
 			NewOutboxRelayStore,

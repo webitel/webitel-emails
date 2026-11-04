@@ -84,9 +84,10 @@ releases, a configured Inbound Email Queue and agents allowed to take emails.
 
 ## Read API
 
-`EmailThreads` has five read methods: `ListEmailThreads`, `LocateEmailThread`
-(without messages), `ListEmailThreadMessages`, `LocateEmailThreadMessage` and
-`GetEmailAttachmentLink`.
+`EmailThreads` has six read methods: `ListEmailThreads`, `LocateEmailThread`
+(without messages), `ListEmailThreadMessages`, `LocateEmailThreadMessage`,
+`GetEmailAttachmentLink` and `ListEmailThreadActions`, the action journal of a
+Thread (see [docs/events.md](docs/events.md)).
 
 - Threads are filtered by `assignment` (`CURRENT`, `HISTORY` or `ALL`, always
   the caller's own), status, profile and contact, and paged by `page`/`size`

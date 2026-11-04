@@ -41,6 +41,25 @@ type EmailThreadProjection struct {
 	// (active, postponed, processing or finished with an agent), never by an offer.
 	ParticipantAgentID *int64
 	ParticipantUserID  *int64
+
+	// Action is the journal row of the snapshot, written whether the Thread changes or not.
+	Action EmailThreadAction
+}
+
+// EmailThreadAction is one transition of a Thread as its action journal keeps it.
+type EmailThreadAction struct {
+	Transition        string
+	Source            string
+	AttemptID         *int64
+	AttemptState      *string
+	Result            *string
+	QueueID           *int64
+	AgentID           *int64
+	AgentUserID       *int64
+	ActorUserID       *int64
+	TransferToQueueID *int64
+	TransferToUserID  *int64
+	Comment           *string
 }
 
 // EmailThreadProjectionOutcome tells what applying a snapshot did.
@@ -65,6 +84,8 @@ type EmailThreadProjectionResult struct {
 	// ParticipantRecorded reports that the participant journal gained or refined
 	// a row, even for a stale snapshot.
 	ParticipantRecorded bool
+	// ActionRecorded reports that the action journal gained the row of this snapshot.
+	ActionRecorded bool
 }
 
 // EmailThreadProjectionStore applies attempt snapshots to Threads. Only a
@@ -72,4 +93,10 @@ type EmailThreadProjectionResult struct {
 // deliveries never matters.
 type EmailThreadProjectionStore interface {
 	Apply(ctx context.Context, projection *EmailThreadProjection) (EmailThreadProjectionResult, error)
+}
+
+// EmailThreadActionCleaner deletes old rows of the action journal.
+type EmailThreadActionCleaner interface {
+	// DeleteActionsBefore removes up to limit actions that occurred before the time.
+	DeleteActionsBefore(ctx context.Context, before time.Time, limit int) (int64, error)
 }

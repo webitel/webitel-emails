@@ -177,8 +177,13 @@ Every field is present; a missing value is an explicit `null`.
 | `agent_id` | int64 or `null` | `cc_agent.id` |
 | `agent_user_id` | int64 or `null` | User of the agent, set together with `agent_id` |
 | `postponed_until` | RFC 3339 or `null` | Only for `postponed` |
+| `actor_user_id` | int64 or `null` | User who sent the command; only for `source = engine` |
+| `comment` | string or `null` | Plain text of the operator: the reason of a return or the comment of a transfer, up to 500 characters |
+| `transfer_to_queue_id` | int64 or `null` | Target queue; only for `transferred` |
+| `transfer_to_user_id` | int64 or `null` | User of the target agent; only for `transferred`, never with `transfer_to_queue_id` |
 
-No email content, addresses or attachments are sent.
+No email content, addresses or attachments are sent; `comment` is written by the
+operator, not taken from the email.
 
 ### Validation
 
@@ -193,10 +198,15 @@ status, when any of these fails:
   `postponed_until` are `null`; `queue_id` may be `null`;
 - any other transition: positive `attempt_id` and `queue_id`, non-negative
   `attempt_version`, `result` only for `leaving`, `postponed_until` exactly for
-  `postponed`, no agent for `waiting`.
+  `postponed`, no agent for `waiting`;
+- `actor_user_id` only for `source = engine` and positive; `comment` only for
+  `returned` or `transferred` of `engine`, 1 to 500 characters;
+- `transferred` is exactly `leaving` with `result = transfer` and has exactly one
+  positive `transfer_to_queue_id` or `transfer_to_user_id`, which no other
+  transition has; `transfer_created` is `waiting` or `offering`.
 
-A new `result`, such as that of a transfer, is unknown until this service maps
-it, so this service is released before `call_center` sends it.
+A new value is unknown until this service maps it, so a release that maps it is
+deployed before `call_center` sends it, as for the Transfer values above.
 
 ### Mapping to the Thread
 
@@ -214,6 +224,7 @@ not matter.
 | `postponed` | `postponed` | agent | snapshot value | `null` |
 | `processing` | `in_progress` | agent | `null` | `null` |
 | `leaving` with `processed` or `processing_timeout` | `processed` | `null` | `null` | `occurred_at` |
+| `leaving` with `transfer` | `new` | `null` | `null` | `null` |
 | `inbound_reopened` | `new` | `null` | `null` | `null` |
 
 `queue_id` is taken from an attempt snapshot and kept after the attempt ends. The
@@ -225,6 +236,12 @@ attempt, so an email that no queue receives stays visible. It updates
 `queue_id` only when it carries one. Its `projection_version` is above the final
 snapshot of the previous attempt and below the `created` snapshot of the next
 one, so a late final snapshot cannot close the Thread again.
+
+A Transfer ends the attempt with `transfer` and creates the next one in the same
+`call_center` transaction (`transfer_created`, mapped by its state like any
+attempt). The transferred attempt does not complete the Thread; its agent, the
+sender, becomes the last handled agent and stays a participant. The recipient of
+a direct transfer gets an offer and becomes a participant only after Take.
 
 The last agent who finished an attempt is kept with its own version: a `leaving`
 snapshot sets it when its `projection_version` is above `last_handled_version`,
@@ -241,6 +258,23 @@ row, so an offer that was not taken gives no history. Only a participant or the
 current agent of a Thread may read it through the read API; `last_handled_*` is
 history, not access. Authors of outbound emails will join the journal with
 outbound email support.
+
+### Action journal
+
+Every snapshot and marker of a regular Thread of the domain adds one row to
+`email.thread_action`, keyed by `projection_version`, in the transaction of the
+projection and whether or not the projection applied it; a repeated or late
+delivery adds nothing. The journal is the Email history of the Thread, apart
+from any system audit: it keeps the transition, attempt state and result, queue,
+agent, the author of an engine command, the reason of a return or the comment of
+a transfer as plain text, and the target of a transfer. It starts with the
+release that has it; earlier transitions are not restored.
+
+`ListEmailThreadActions` returns it oldest first, paged by an opaque cursor, to
+the users who see the Thread through the read API. Names come from
+`directory.wbt_user` of the same domain. With `thread_action.retention`
+(`THREAD_ACTION_RETENTION`, `0` by default: keep everything) the leader deletes
+older actions once an hour in batches; agree the value before production.
 
 Other consumers of this event, such as delivery to Workspace, must expect
 `inbound_reopened` without an attempt.
@@ -263,15 +297,16 @@ connection or channel, with a growing pause.
   (`thread_projection.delivery_limit`, which cannot change once the queue exists).
 - A database outage keeps the delivery and retries it until it succeeds, the
   service stops or the channel closes; it is never dead-lettered.
-- The applied, stale and rejected counts, the recorded participants and the lag
+- The applied, stale and rejected counts, the recorded participants and actions and the lag
   (`now - occurred_at`) are logged every `thread_projection.report_interval`;
   payloads are never logged.
 
 ### Changing the email-service version
 
 All instances share `email.thread.projection`, and a version without the
-participant journal acknowledges snapshots without recording participants;
-those snapshots never come again. So old and new instances must never consume
+participant or action journal acknowledges snapshots without recording them;
+those snapshots never come again. A version without the Transfer values sends
+them to the dead letter queue. So old and new instances must never consume
 at the same time, both on upgrade and on rollback:
 
 1. Stop the snapshot publisher on every `call_center` node

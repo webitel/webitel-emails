@@ -1988,6 +1988,272 @@ func (x *GetEmailAttachmentLinkResponse) GetExpiresAt() int64 {
 	return 0
 }
 
+// ListEmailThreadActionsRequest selects a page of the actions of a conversation.
+type ListEmailThreadActionsRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId int64                  `protobuf:"varint,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	// Actions per page, 1 to 100; 0 is 20.
+	Size int32 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	// Opaque cursor from a previous page; empty for the first.
+	Cursor        string `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListEmailThreadActionsRequest) Reset() {
+	*x = ListEmailThreadActionsRequest{}
+	mi := &file_thread_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListEmailThreadActionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListEmailThreadActionsRequest) ProtoMessage() {}
+
+func (x *ListEmailThreadActionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListEmailThreadActionsRequest.ProtoReflect.Descriptor instead.
+func (*ListEmailThreadActionsRequest) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ListEmailThreadActionsRequest) GetThreadId() int64 {
+	if x != nil {
+		return x.ThreadId
+	}
+	return 0
+}
+
+func (x *ListEmailThreadActionsRequest) GetSize() int32 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *ListEmailThreadActionsRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+// EmailThreadAction is one transition of the conversation in call_center.
+type EmailThreadAction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Order of the action among the actions of the conversation.
+	ProjectionVersion int64 `protobuf:"varint,1,opt,name=projection_version,json=projectionVersion,proto3" json:"projection_version,omitempty"`
+	// Unix milliseconds.
+	OccurredAt int64  `protobuf:"varint,2,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	Transition string `protobuf:"bytes,3,opt,name=transition,proto3" json:"transition,omitempty"`
+	// Empty for a reopening without an attempt.
+	AttemptState string `protobuf:"bytes,4,opt,name=attempt_state,json=attemptState,proto3" json:"attempt_state,omitempty"`
+	// Set when the attempt left: processed, processing_timeout or transfer.
+	Result string `protobuf:"bytes,5,opt,name=result,proto3" json:"result,omitempty"`
+	// engine, flow or system.
+	Source string `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
+	// The operator who sent the command; empty for flow and system.
+	Actor *Lookup `protobuf:"bytes,7,opt,name=actor,proto3" json:"actor,omitempty"`
+	// The user of the agent of the attempt after the action.
+	Agent   *Lookup `protobuf:"bytes,8,opt,name=agent,proto3" json:"agent,omitempty"`
+	QueueId int64   `protobuf:"varint,9,opt,name=queue_id,json=queueId,proto3" json:"queue_id,omitempty"`
+	// Set only for a transfer, one of the two.
+	TransferToQueueId int64   `protobuf:"varint,10,opt,name=transfer_to_queue_id,json=transferToQueueId,proto3" json:"transfer_to_queue_id,omitempty"`
+	TransferToUser    *Lookup `protobuf:"bytes,11,opt,name=transfer_to_user,json=transferToUser,proto3" json:"transfer_to_user,omitempty"`
+	// Plain text: the reason of a return or the comment of a transfer.
+	Comment       string `protobuf:"bytes,12,opt,name=comment,proto3" json:"comment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmailThreadAction) Reset() {
+	*x = EmailThreadAction{}
+	mi := &file_thread_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmailThreadAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmailThreadAction) ProtoMessage() {}
+
+func (x *EmailThreadAction) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmailThreadAction.ProtoReflect.Descriptor instead.
+func (*EmailThreadAction) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *EmailThreadAction) GetProjectionVersion() int64 {
+	if x != nil {
+		return x.ProjectionVersion
+	}
+	return 0
+}
+
+func (x *EmailThreadAction) GetOccurredAt() int64 {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return 0
+}
+
+func (x *EmailThreadAction) GetTransition() string {
+	if x != nil {
+		return x.Transition
+	}
+	return ""
+}
+
+func (x *EmailThreadAction) GetAttemptState() string {
+	if x != nil {
+		return x.AttemptState
+	}
+	return ""
+}
+
+func (x *EmailThreadAction) GetResult() string {
+	if x != nil {
+		return x.Result
+	}
+	return ""
+}
+
+func (x *EmailThreadAction) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *EmailThreadAction) GetActor() *Lookup {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+func (x *EmailThreadAction) GetAgent() *Lookup {
+	if x != nil {
+		return x.Agent
+	}
+	return nil
+}
+
+func (x *EmailThreadAction) GetQueueId() int64 {
+	if x != nil {
+		return x.QueueId
+	}
+	return 0
+}
+
+func (x *EmailThreadAction) GetTransferToQueueId() int64 {
+	if x != nil {
+		return x.TransferToQueueId
+	}
+	return 0
+}
+
+func (x *EmailThreadAction) GetTransferToUser() *Lookup {
+	if x != nil {
+		return x.TransferToUser
+	}
+	return nil
+}
+
+func (x *EmailThreadAction) GetComment() string {
+	if x != nil {
+		return x.Comment
+	}
+	return ""
+}
+
+// EmailThreadActionList is a page of actions.
+type EmailThreadActionList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*EmailThreadAction   `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	Next          bool                   `protobuf:"varint,2,opt,name=next,proto3" json:"next,omitempty"`
+	NextCursor    string                 `protobuf:"bytes,3,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmailThreadActionList) Reset() {
+	*x = EmailThreadActionList{}
+	mi := &file_thread_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmailThreadActionList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmailThreadActionList) ProtoMessage() {}
+
+func (x *EmailThreadActionList) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmailThreadActionList.ProtoReflect.Descriptor instead.
+func (*EmailThreadActionList) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *EmailThreadActionList) GetItems() []*EmailThreadAction {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *EmailThreadActionList) GetNext() bool {
+	if x != nil {
+		return x.Next
+	}
+	return false
+}
+
+func (x *EmailThreadActionList) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
+}
+
 var File_thread_proto protoreflect.FileDescriptor
 
 const file_thread_proto_rawDesc = "" +
@@ -2115,7 +2381,33 @@ const file_thread_proto_rawDesc = "" +
 	"\x1eGetEmailAttachmentLinkResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\x03R\texpiresAt*\xe5\x01\n" +
+	"expires_at\x18\x02 \x01(\x03R\texpiresAt\"h\n" +
+	"\x1dListEmailThreadActionsRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\x03R\bthreadId\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x05R\x04size\x12\x16\n" +
+	"\x06cursor\x18\x03 \x01(\tR\x06cursor\"\xc7\x03\n" +
+	"\x11EmailThreadAction\x12-\n" +
+	"\x12projection_version\x18\x01 \x01(\x03R\x11projectionVersion\x12\x1f\n" +
+	"\voccurred_at\x18\x02 \x01(\x03R\n" +
+	"occurredAt\x12\x1e\n" +
+	"\n" +
+	"transition\x18\x03 \x01(\tR\n" +
+	"transition\x12#\n" +
+	"\rattempt_state\x18\x04 \x01(\tR\fattemptState\x12\x16\n" +
+	"\x06result\x18\x05 \x01(\tR\x06result\x12\x16\n" +
+	"\x06source\x18\x06 \x01(\tR\x06source\x12%\n" +
+	"\x05actor\x18\a \x01(\v2\x0f.general.LookupR\x05actor\x12%\n" +
+	"\x05agent\x18\b \x01(\v2\x0f.general.LookupR\x05agent\x12\x19\n" +
+	"\bqueue_id\x18\t \x01(\x03R\aqueueId\x12/\n" +
+	"\x14transfer_to_queue_id\x18\n" +
+	" \x01(\x03R\x11transferToQueueId\x129\n" +
+	"\x10transfer_to_user\x18\v \x01(\v2\x0f.general.LookupR\x0etransferToUser\x12\x18\n" +
+	"\acomment\x18\f \x01(\tR\acomment\"\x84\x01\n" +
+	"\x15EmailThreadActionList\x126\n" +
+	"\x05items\x18\x01 \x03(\v2 .webitel.email.EmailThreadActionR\x05items\x12\x12\n" +
+	"\x04next\x18\x02 \x01(\bR\x04next\x12\x1f\n" +
+	"\vnext_cursor\x18\x03 \x01(\tR\n" +
+	"nextCursor*\xe5\x01\n" +
 	"\x11EmailThreadStatus\x12#\n" +
 	"\x1fEMAIL_THREAD_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EMAIL_THREAD_STATUS_NEW\x10\x01\x12#\n" +
@@ -2171,7 +2463,8 @@ const file_thread_proto_rawDesc = "" +
 	"4EMAIL_ATTACHMENT_SKIPPED_REASON_COUNT_LIMIT_EXCEEDED\x10\x01\x127\n" +
 	"3EMAIL_ATTACHMENT_SKIPPED_REASON_SIZE_LIMIT_EXCEEDED\x10\x02\x12=\n" +
 	"9EMAIL_ATTACHMENT_SKIPPED_REASON_TOTAL_SIZE_LIMIT_EXCEEDED\x10\x03\x12.\n" +
-	"*EMAIL_ATTACHMENT_SKIPPED_REASON_READ_ERROR\x10\x042\xa5\t\n" +
+	"*EMAIL_ATTACHMENT_SKIPPED_REASON_READ_ERROR\x10\x042\xc7\n" +
+	"\n" +
 	"\fEmailThreads\x12\xab\x01\n" +
 	"\x16BindEmailThreadContact\x12,.webitel.email.BindEmailThreadContactRequest\x1a-.webitel.email.BindEmailThreadContactResponse\"4\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02*:\x01*\x1a%/v1/email/threads/{thread_id}/contact\x12\xae\x01\n" +
 	"\x18UnbindEmailThreadContact\x12..webitel.email.UnbindEmailThreadContactRequest\x1a/.webitel.email.UnbindEmailThreadContactResponse\"1\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02'*%/v1/email/threads/{thread_id}/contact\x12y\n" +
@@ -2179,7 +2472,8 @@ const file_thread_proto_rawDesc = "" +
 	"\x11LocateEmailThread\x12'.webitel.email.LocateEmailThreadRequest\x1a\x1a.webitel.email.EmailThread\")\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02\x1f\x12\x1d/v1/email/threads/{thread_id}\x12\x9d\x01\n" +
 	"\x17ListEmailThreadMessages\x12-.webitel.email.ListEmailThreadMessagesRequest\x1a\x1f.webitel.email.EmailMessageList\"2\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02(\x12&/v1/email/threads/{thread_id}/messages\x12\xa8\x01\n" +
 	"\x18LocateEmailThreadMessage\x12..webitel.email.LocateEmailThreadMessageRequest\x1a\x1b.webitel.email.EmailMessage\"?\x90\xb5\x18\x01\x82\xd3\xe4\x93\x025\x123/v1/email/threads/{thread_id}/messages/{message_id}\x12\xd7\x01\n" +
-	"\x16GetEmailAttachmentLink\x12,.webitel.email.GetEmailAttachmentLinkRequest\x1a-.webitel.email.GetEmailAttachmentLinkResponse\"`\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02V\x12T/v1/email/threads/{thread_id}/messages/{message_id}/attachments/{attachment_id}/link\x1a\x10\x8a\xb5\x18\femail_threadB\xa8\x01\n" +
+	"\x16GetEmailAttachmentLink\x12,.webitel.email.GetEmailAttachmentLinkRequest\x1a-.webitel.email.GetEmailAttachmentLinkResponse\"`\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02V\x12T/v1/email/threads/{thread_id}/messages/{message_id}/attachments/{attachment_id}/link\x12\x9f\x01\n" +
+	"\x16ListEmailThreadActions\x12,.webitel.email.ListEmailThreadActionsRequest\x1a$.webitel.email.EmailThreadActionList\"1\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02'\x12%/v1/email/threads/{thread_id}/actions\x1a\x10\x8a\xb5\x18\femail_threadB\xa8\x01\n" +
 	"\x11com.webitel.emailB\vThreadProtoP\x01Z1github.com/webitel/webitel-emails/api/email;email\xa2\x02\x03WEX\xaa\x02\rWebitel.Email\xca\x02\rWebitel\\Email\xe2\x02\x19Webitel\\Email\\GPBMetadata\xea\x02\x0eWebitel::Emailb\x06proto3"
 
 var (
@@ -2195,7 +2489,7 @@ func file_thread_proto_rawDescGZIP() []byte {
 }
 
 var file_thread_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
-var file_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_thread_proto_goTypes = []any{
 	(EmailThreadStatus)(0),                   // 0: webitel.email.EmailThreadStatus
 	(EmailThreadAccess)(0),                   // 1: webitel.email.EmailThreadAccess
@@ -2226,16 +2520,19 @@ var file_thread_proto_goTypes = []any{
 	(*LocateEmailThreadMessageRequest)(nil),  // 26: webitel.email.LocateEmailThreadMessageRequest
 	(*GetEmailAttachmentLinkRequest)(nil),    // 27: webitel.email.GetEmailAttachmentLinkRequest
 	(*GetEmailAttachmentLinkResponse)(nil),   // 28: webitel.email.GetEmailAttachmentLinkResponse
-	(*Lookup)(nil),                           // 29: general.Lookup
+	(*ListEmailThreadActionsRequest)(nil),    // 29: webitel.email.ListEmailThreadActionsRequest
+	(*EmailThreadAction)(nil),                // 30: webitel.email.EmailThreadAction
+	(*EmailThreadActionList)(nil),            // 31: webitel.email.EmailThreadActionList
+	(*Lookup)(nil),                           // 32: general.Lookup
 }
 var file_thread_proto_depIdxs = []int32{
 	4,  // 0: webitel.email.EmailThreadPreview.direction:type_name -> webitel.email.EmailMessageDirection
 	15, // 1: webitel.email.EmailThreadPreview.from:type_name -> webitel.email.EmailAddress
-	29, // 2: webitel.email.EmailThread.profile:type_name -> general.Lookup
+	32, // 2: webitel.email.EmailThread.profile:type_name -> general.Lookup
 	0,  // 3: webitel.email.EmailThread.status:type_name -> webitel.email.EmailThreadStatus
 	3,  // 4: webitel.email.EmailThread.contact_resolution_state:type_name -> webitel.email.EmailContactResolutionState
-	29, // 5: webitel.email.EmailThread.current_user:type_name -> general.Lookup
-	29, // 6: webitel.email.EmailThread.last_handled_user:type_name -> general.Lookup
+	32, // 5: webitel.email.EmailThread.current_user:type_name -> general.Lookup
+	32, // 6: webitel.email.EmailThread.last_handled_user:type_name -> general.Lookup
 	1,  // 7: webitel.email.EmailThread.access:type_name -> webitel.email.EmailThreadAccess
 	16, // 8: webitel.email.EmailThread.preview:type_name -> webitel.email.EmailThreadPreview
 	2,  // 9: webitel.email.ListEmailThreadsRequest.assignment:type_name -> webitel.email.EmailThreadAssignment
@@ -2256,25 +2553,31 @@ var file_thread_proto_depIdxs = []int32{
 	22, // 24: webitel.email.EmailMessage.attachments:type_name -> webitel.email.EmailAttachment
 	6,  // 25: webitel.email.ListEmailThreadMessagesRequest.order:type_name -> webitel.email.EmailMessageOrder
 	23, // 26: webitel.email.EmailMessageList.items:type_name -> webitel.email.EmailMessage
-	11, // 27: webitel.email.EmailThreads.BindEmailThreadContact:input_type -> webitel.email.BindEmailThreadContactRequest
-	13, // 28: webitel.email.EmailThreads.UnbindEmailThreadContact:input_type -> webitel.email.UnbindEmailThreadContactRequest
-	18, // 29: webitel.email.EmailThreads.ListEmailThreads:input_type -> webitel.email.ListEmailThreadsRequest
-	20, // 30: webitel.email.EmailThreads.LocateEmailThread:input_type -> webitel.email.LocateEmailThreadRequest
-	24, // 31: webitel.email.EmailThreads.ListEmailThreadMessages:input_type -> webitel.email.ListEmailThreadMessagesRequest
-	26, // 32: webitel.email.EmailThreads.LocateEmailThreadMessage:input_type -> webitel.email.LocateEmailThreadMessageRequest
-	27, // 33: webitel.email.EmailThreads.GetEmailAttachmentLink:input_type -> webitel.email.GetEmailAttachmentLinkRequest
-	12, // 34: webitel.email.EmailThreads.BindEmailThreadContact:output_type -> webitel.email.BindEmailThreadContactResponse
-	14, // 35: webitel.email.EmailThreads.UnbindEmailThreadContact:output_type -> webitel.email.UnbindEmailThreadContactResponse
-	19, // 36: webitel.email.EmailThreads.ListEmailThreads:output_type -> webitel.email.EmailThreadList
-	17, // 37: webitel.email.EmailThreads.LocateEmailThread:output_type -> webitel.email.EmailThread
-	25, // 38: webitel.email.EmailThreads.ListEmailThreadMessages:output_type -> webitel.email.EmailMessageList
-	23, // 39: webitel.email.EmailThreads.LocateEmailThreadMessage:output_type -> webitel.email.EmailMessage
-	28, // 40: webitel.email.EmailThreads.GetEmailAttachmentLink:output_type -> webitel.email.GetEmailAttachmentLinkResponse
-	34, // [34:41] is the sub-list for method output_type
-	27, // [27:34] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	32, // 27: webitel.email.EmailThreadAction.actor:type_name -> general.Lookup
+	32, // 28: webitel.email.EmailThreadAction.agent:type_name -> general.Lookup
+	32, // 29: webitel.email.EmailThreadAction.transfer_to_user:type_name -> general.Lookup
+	30, // 30: webitel.email.EmailThreadActionList.items:type_name -> webitel.email.EmailThreadAction
+	11, // 31: webitel.email.EmailThreads.BindEmailThreadContact:input_type -> webitel.email.BindEmailThreadContactRequest
+	13, // 32: webitel.email.EmailThreads.UnbindEmailThreadContact:input_type -> webitel.email.UnbindEmailThreadContactRequest
+	18, // 33: webitel.email.EmailThreads.ListEmailThreads:input_type -> webitel.email.ListEmailThreadsRequest
+	20, // 34: webitel.email.EmailThreads.LocateEmailThread:input_type -> webitel.email.LocateEmailThreadRequest
+	24, // 35: webitel.email.EmailThreads.ListEmailThreadMessages:input_type -> webitel.email.ListEmailThreadMessagesRequest
+	26, // 36: webitel.email.EmailThreads.LocateEmailThreadMessage:input_type -> webitel.email.LocateEmailThreadMessageRequest
+	27, // 37: webitel.email.EmailThreads.GetEmailAttachmentLink:input_type -> webitel.email.GetEmailAttachmentLinkRequest
+	29, // 38: webitel.email.EmailThreads.ListEmailThreadActions:input_type -> webitel.email.ListEmailThreadActionsRequest
+	12, // 39: webitel.email.EmailThreads.BindEmailThreadContact:output_type -> webitel.email.BindEmailThreadContactResponse
+	14, // 40: webitel.email.EmailThreads.UnbindEmailThreadContact:output_type -> webitel.email.UnbindEmailThreadContactResponse
+	19, // 41: webitel.email.EmailThreads.ListEmailThreads:output_type -> webitel.email.EmailThreadList
+	17, // 42: webitel.email.EmailThreads.LocateEmailThread:output_type -> webitel.email.EmailThread
+	25, // 43: webitel.email.EmailThreads.ListEmailThreadMessages:output_type -> webitel.email.EmailMessageList
+	23, // 44: webitel.email.EmailThreads.LocateEmailThreadMessage:output_type -> webitel.email.EmailMessage
+	28, // 45: webitel.email.EmailThreads.GetEmailAttachmentLink:output_type -> webitel.email.GetEmailAttachmentLinkResponse
+	31, // 46: webitel.email.EmailThreads.ListEmailThreadActions:output_type -> webitel.email.EmailThreadActionList
+	39, // [39:47] is the sub-list for method output_type
+	31, // [31:39] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_thread_proto_init() }
@@ -2289,7 +2592,7 @@ func file_thread_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_thread_proto_rawDesc), len(file_thread_proto_rawDesc)),
 			NumEnums:      11,
-			NumMessages:   18,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

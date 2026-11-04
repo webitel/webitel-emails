@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -102,6 +103,12 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 		result.ParticipantRecorded = recorded
 	}
 
+	recorded, err := recordAction(ctx, tx, p)
+	if err != nil {
+		return result, err
+	}
+	result.ActionRecorded = recorded
+
 	if applied {
 		result.Outcome = store.EmailThreadProjectionApplied
 
@@ -155,6 +162,49 @@ WHERE tp.first_version IS NULL
 	}
 
 	return tag.RowsAffected() == 1, nil
+}
+
+// recordAction keeps one journal row per snapshot of a regular Thread, so a repeated
+// or late delivery never adds another.
+func recordAction(ctx context.Context, tx pgx.Tx, p *store.EmailThreadProjection) (bool, error) {
+	const record = `
+INSERT INTO email.thread_action (
+    domain_id, thread_id, projection_version, occurred_at, transition, source,
+    attempt_id, attempt_state, result, queue_id, agent_id, agent_user_id,
+    actor_user_id, transfer_to_queue_id, transfer_to_user_id, comment)
+SELECT t.domain_id, t.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+FROM email.thread t
+WHERE t.domain_id = $1 AND t.id = $2 AND t.kind = 'regular'
+ON CONFLICT (domain_id, thread_id, projection_version) DO NOTHING`
+
+	a := p.Action
+	tag, err := tx.Exec(ctx, record,
+		p.DomainID, p.ThreadID, p.Version, p.OccurredAt, a.Transition, a.Source,
+		a.AttemptID, a.AttemptState, a.Result, a.QueueID, a.AgentID, a.AgentUserID,
+		a.ActorUserID, a.TransferToQueueID, a.TransferToUserID, a.Comment)
+	if err != nil {
+		return false, projectionError("record action", err)
+	}
+
+	return tag.RowsAffected() == 1, nil
+}
+
+// DeleteActionsBefore removes up to limit actions older than before, oldest first.
+func (s *emailThreadProjectionStore) DeleteActionsBefore(ctx context.Context, before time.Time, limit int) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+DELETE FROM email.thread_action
+WHERE (domain_id, thread_id, projection_version) IN (
+    SELECT domain_id, thread_id, projection_version
+    FROM email.thread_action
+    WHERE occurred_at < $1
+    ORDER BY occurred_at
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED)`, before, limit)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete thread actions: %w", err)
+	}
+
+	return tag.RowsAffected(), nil
 }
 
 // projectionError marks data and constraint errors as permanent; anything else

@@ -218,6 +218,17 @@ var WebitelAPI = WebitelServicesInfo{
 					},
 				},
 			},
+			"ListEmailThreadActions": WebitelMethod{
+				Access: 1,
+				Input:  "ListEmailThreadActionsRequest",
+				Output: "EmailThreadActionList",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/actions",
+						Method: "GET",
+					},
+				},
+			},
 		},
 	},
 }
