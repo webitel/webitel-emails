@@ -69,5 +69,10 @@ type EmailThreadView struct {
 	CurrentAttemptID      *int64
 	CurrentAttemptVersion *int64
 
+	// Read metadata of every view: the applied call_center snapshot, nil before the
+	// first, and the version of what the read API shows.
+	ProjectionVersion *int64
+	WorkspaceVersion  int64
+
 	Preview *EmailThreadPreview
 }

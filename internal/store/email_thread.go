@@ -54,16 +54,14 @@ type EmailThreadStore interface {
 	LocateByInReplyTo(ctx context.Context, lookup EmailThreadLookup, inReplyTo string) (*model.EmailThread, error)
 	// ResolveContact stores the outcome of contact resolution. It applies only
 	// while the Thread is pending or was left unavailable, so a manual decision
-	// of an operator is never overwritten; false means it was not applied.
+	// of an operator is never overwritten; false means it was not applied or
+	// changed nothing.
 	ResolveContact(
 		ctx context.Context,
 		domainID, threadID int64,
 		state model.EmailContactResolutionState,
 		contactID *int64,
 	) (bool, error)
-	// SetContactManually stores an operator decision while the user is assigned by the
-	// latest projection; false means not applied, and the caller tells why.
-	SetContactManually(ctx context.Context, domainID, userID, threadID int64, contactID *int64) (bool, error)
 	// FirstSenderAddress returns the normalized From address of the earliest
 	// message of a Thread, which is the address its contact is resolved by.
 	// An empty result means the Thread has no usable sender address.
@@ -91,8 +89,8 @@ type EmailMessageStore interface {
 	// MarkReady completes a message once its manifest holds no pending part and
 	// returns the state the message ends up in. "ready" means it is complete,
 	// whether this call or a concurrent delivery finished it; "processing" means a
-	// part is still pending.
-	MarkReady(ctx context.Context, domainID, messageID int64) (model.EmailMessageState, error)
+	// part is still pending. completed is true only for the call that finished it.
+	MarkReady(ctx context.Context, domainID, messageID int64) (state model.EmailMessageState, completed bool, err error)
 	// MarkFailed gives up on a processing message. False means it was already
 	// finished, so the caller must not record a reason for it.
 	MarkFailed(ctx context.Context, domainID, messageID int64) (bool, error)
@@ -126,4 +124,13 @@ type EmailRecipientStore interface {
 type EmailProfileRoutingStore interface {
 	// FlowID returns the Flow of a profile; nil means the profile has none.
 	FlowID(ctx context.Context, domainID, profileID int64) (*int64, error)
+}
+
+// EmailThreadContactStore stores the contact an operator chose, with its Workspace
+// event, in one transaction.
+type EmailThreadContactStore interface {
+	// SetContactManually stores an operator decision while the user is assigned by the
+	// latest projection; false means not applied, and the caller tells why. It is the
+	// only writer of an operator decision.
+	SetContactManually(ctx context.Context, domainID, userID, threadID int64, contactID *int64) (bool, error)
 }

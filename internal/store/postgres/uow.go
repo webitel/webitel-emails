@@ -18,6 +18,8 @@ type unitOfWork struct {
 	db      Database
 	querier Querier
 	inTx    bool
+	// workspaceEvents writes the Workspace events; versions grow either way.
+	workspaceEvents bool
 }
 
 var _ store.UnitOfWork = (*unitOfWork)(nil)
@@ -25,6 +27,13 @@ var _ store.UnitOfWork = (*unitOfWork)(nil)
 // NewUnitOfWork creates a unit of work running on db.
 func NewUnitOfWork(db Database) *unitOfWork {
 	return &unitOfWork{db: db, querier: db}
+}
+
+// WithWorkspaceEvents turns on writing the Workspace events.
+func (u *unitOfWork) WithWorkspaceEvents(enabled bool) *unitOfWork {
+	u.workspaceEvents = enabled
+
+	return u
 }
 
 // EmailThreadStore returns the Thread store bound to the current querier.
@@ -61,6 +70,11 @@ func (u *unitOfWork) EmailProfileRoutingStore() store.EmailProfileRoutingStore {
 // OutboxStore returns the Outbox store bound to the current querier.
 func (u *unitOfWork) OutboxStore() store.OutboxStore {
 	return NewOutboxStore(u.querier)
+}
+
+// EmailWorkspaceEventStore returns the Workspace writer bound to the current querier.
+func (u *unitOfWork) EmailWorkspaceEventStore() store.EmailWorkspaceEventStore {
+	return NewEmailWorkspaceEventStore(u.querier, u.workspaceEvents)
 }
 
 // EnsureEmailProfileAssignment checks the fencing token without locking the row.

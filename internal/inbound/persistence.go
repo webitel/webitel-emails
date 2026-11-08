@@ -151,6 +151,10 @@ func (h *PersistenceHandler) persist(
 		return nil, err
 	}
 
+	if err := recordMessageCreated(ctx, uow, parsed.DomainID, thread.ID, message.ID); err != nil {
+		return nil, err
+	}
+
 	return nil, h.events.Write(ctx, uow, parsed.DomainID, message.ID)
 }
 

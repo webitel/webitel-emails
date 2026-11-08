@@ -103,7 +103,7 @@ func TestThreadVisibilityBoundary(t *testing.T) {
 	}
 
 	t.Run("a manual contact needs the assignment in the update itself", func(t *testing.T) {
-		threads := storepostgres.NewEmailThreadStore(db)
+		threads := storepostgres.NewEmailThreadContactStore(db, false)
 		contactID := int64(42)
 		for _, id := range []int64{offered, history} {
 			if applied, err := threads.SetContactManually(ctx, 1, 70, id, &contactID); err != nil || applied {

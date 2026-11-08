@@ -30,10 +30,13 @@ parameters fails the channel, so both sides use exactly these values.
 
 | Object | Declared by | Parameters |
 |---|---|---|
-| Exchange `email.events` | email-service, flow_manager | `topic` |
+| Exchange `email.events` | email-service, flow_manager, engine | `topic` |
 | Queue `flow.email.inbound` | flow_manager | `x-queue-type = quorum`, `x-dead-letter-exchange = email.events.dlx`, `x-delivery-limit` (default 20); bound to `email.events` with `email.message.inbound.v1` |
 | Exchange `email.events.dlx` | flow_manager | `fanout` |
 | Queue `flow.email.inbound.dlq` | flow_manager | `x-queue-type = quorum`; bound to `email.events.dlx` without a routing key |
+
+`engine` binds the queues of its nodes to the same exchange for the Workspace
+events below, one key per user, never to `email.message.inbound.v1`.
 
 ### Envelope
 
@@ -123,6 +126,106 @@ Until step 2 the relay logs `unroutable` and retries without spending attempts.
 For high availability enable `EMAIL_EVENTS=true` on every `flow_manager`
 instance.
 
+## Workspace events, schema 1
+
+These events tell an operator's Workspace, through `engine`, that a Thread
+they see has changed. An event is a signal, not data: Workspace reads the
+Thread, its Messages and actions again through the read API, which keeps the
+only check of access, sanitizing and attachment links. This is the backend
+contract of stage 17 (EM-26); its WebSocket form, in the `engine`
+documentation, waits for confirmation by Workspace.
+
+| Event type | Routing key | When |
+|---|---|---|
+| `email.workspace.thread.changed` | `email.workspace.thread.changed.v1.<domain_id>.<user_id>` | An applied projection, a new action or participant, a contact change |
+| `email.workspace.message.created` | `email.workspace.message.created.v1.<domain_id>.<user_id>` | A Message of a regular Thread became `ready`; a contact resolved with it comes with this event |
+| `email.workspace.message.delivery` | `email.workspace.message.delivery.v1.<domain_id>.<user_id>` | Reserved for the SMTP status of an outbound Message (stage 17.7); not sent yet |
+
+All go to `email.events` (topic) as `application/json`, persistent, with confirms
+and the headers `x-event-id`, `x-event-type` and `x-schema-version`, and
+**without** `mandatory`: as for calls and chats, the key names the recipient,
+and a recipient without an open socket has no bound queue, so the event is
+simply not delivered. Adding a field keeps `schema_version`; changing or
+removing one bumps it and the version in the routing key. Consumers must ignore
+unknown fields.
+
+### Recipients
+
+One event is written per recipient, in the transaction of the change, so the
+payload never lists users. The recipients are the current user of the Thread
+before and after the change and every user of its participant journal, without
+repeats. A Thread without a ready Message, a service Thread and a Thread without
+any of these users produce no event. The event gives each recipient their
+access after the change; the read API still decides what they see.
+
+### Envelope
+
+Every field is present; a missing value is an explicit `null`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `event_id` | UUID | UUIDv5, see "Event id"; also the dedup key of the row: a republished row keeps it |
+| `event_type` | string | One of the types above |
+| `schema_version` | int | `1` |
+| `occurred_at` | RFC 3339, UTC | Time of the change |
+| `domain_id` | int64 | |
+| `user_id` | int64 | The recipient |
+| `thread_id` | int64 | |
+| `access` | string | The recipient's relation after the change, by the read API rules: `current`, `history` or `none` |
+| `workspace_version` | int64 | `email.thread.workspace_version` after the change, for every `access` |
+| `projection_version` | int64 or `null` | The applied `call_center` snapshot at that moment; `null` only for a Thread never projected |
+| `message_id` | int64 or `null` | Only for `message.created` and `message.delivery` |
+| `changes` | array of string | Only for `thread.changed`: some of `projection`, `actions`, `participants`, `contact`; empty for `access = none` |
+
+`access = none` comes only with `thread.changed`: the recipient lost the Thread,
+for example after an offer they did not take. It is an invalidation: it keeps
+both versions, so a late one is told from a later assignment, but carries no
+Message and no change. No subject, body, address, attachment, reason or comment
+is ever sent. A payload stays under 4 KiB, independent of the
+`inbound_event.*` limits.
+
+### Event id
+
+`event_id` is the UUIDv5 (SHA-1, Go `uuid.NewSHA1`) of the namespace
+`38ad4b08-3ead-470a-ba68-4b72ffd03723` and the UTF-8 string
+`<event_type>:<domain_id>:<thread_id>:<workspace_version>:<user_id>`, numbers
+in decimal without sign or leading zeros:
+
+| String | `event_id` |
+|---|---|
+| `email.workspace.thread.changed:1:1024:17:42` | `5b247aa1-9433-53ce-b37d-346cec14bff5` |
+| `email.workspace.message.created:1:1024:19:42` | `2c68a74d-7da5-58dd-b6c0-7a9de072241b` |
+
+### Versions
+
+Three versions are never mixed, and each is compared only within one Thread:
+
+- `attempt_version` belongs to one attempt and serves the commands of `engine`;
+- `projection_version` orders the `call_center` snapshots of a Thread, across
+  attempts; it is not lowered by a stale snapshot;
+- `workspace_version` grows by one, under the lock of the Thread, with every
+  change of its visible state: a ready Message, an applied projection, an added
+  action or participant, a contact, later an SMTP status. A repeated change
+  that alters nothing leaves it and writes no event. `0` means no change since
+  the release that added it; old changes get no events.
+
+The read API returns `projection_version` and `workspace_version` of every
+Thread (`EmailThread` fields 20 and 21, `0` for none). Messages and actions are
+read by further calls, so one version does not make several calls atomic.
+
+### Publishing
+
+`workspace_events.enabled` (`WORKSPACE_EVENTS_ENABLED`, `false` by default)
+turns on writing new events; rows already in the Outbox are published either
+way, and `workspace_version` grows either way.
+
+Workspace events go through a publisher of their own on the same connection:
+confirms without `mandatory`, so they never wait for a route. Flow events keep
+`mandatory` and their retry without a route. Every broker failure (lost
+connection, confirm timeout, nack) and every database failure pause the whole
+batch as before. `engine` declares `email.events` with the same parameters and
+binds the queues of its nodes; this service declares no queue for it.
+
 ## `cc.email.attempt.snapshot`, schema 1
 
 Consumed by this service. `call_center` writes the full Email attempt to its
@@ -151,7 +254,9 @@ persistent and published with confirms and `mandatory`, with the headers
 | Exchange `cc.email.events.dlx` | email-service | `fanout` |
 | Queue `email.thread.projection.dlq` | email-service | `x-queue-type = quorum`; bound to `cc.email.events.dlx` without a routing key |
 
-Both sides redeclare their objects after a reconnect until it succeeds.
+Both sides redeclare their objects after a reconnect until it succeeds. The
+snapshots reach this service alone; Workspace hears of them through the
+Workspace events above.
 
 ### Envelope
 

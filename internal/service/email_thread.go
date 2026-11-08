@@ -23,14 +23,14 @@ type ThreadRightsReader interface {
 // EmailThreadService serves operator decisions about a Thread's contact. Only the
 // current agent after Take may change it, by the possibly lagging projection.
 type EmailThreadService struct {
-	threads  store.EmailThreadStore
+	threads  store.EmailThreadContactStore
 	rights   ThreadRightsReader
 	contacts ContactVerifier
 }
 
 // NewEmailThreadService creates the Thread service.
 func NewEmailThreadService(
-	threads store.EmailThreadStore,
+	threads store.EmailThreadContactStore,
 	rights ThreadRightsReader,
 	contacts ContactVerifier,
 ) *EmailThreadService {

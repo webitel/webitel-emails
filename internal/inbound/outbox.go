@@ -109,3 +109,29 @@ func (w *EventWriter) Write(ctx context.Context, uow store.UnitOfWork, domainID,
 
 	return nil
 }
+
+// recordMessageCreated tells Workspace about a Message that has just become ready,
+// in the transaction that made it ready.
+func recordMessageCreated(ctx context.Context, uow store.UnitOfWork, domainID, threadID, messageID int64) error {
+	_, err := uow.EmailWorkspaceEventStore().Record(ctx, store.EmailWorkspaceChange{
+		DomainID: domainID, ThreadID: threadID, EventType: event.TypeWorkspaceMessageCreated,
+		MessageID: &messageID, OccurredAt: time.Now(),
+	})
+
+	return err
+}
+
+// recordContactChanged tells Workspace about a contact resolved without a new ready
+// Message; nothing happens when the contact did not change.
+func recordContactChanged(ctx context.Context, uow store.UnitOfWork, domainID, threadID int64, changed bool) error {
+	if !changed {
+		return nil
+	}
+
+	_, err := uow.EmailWorkspaceEventStore().Record(ctx, store.EmailWorkspaceChange{
+		DomainID: domainID, ThreadID: threadID, EventType: event.TypeWorkspaceThreadChanged,
+		Changes: []string{event.WorkspaceChangeContact}, OccurredAt: time.Now(),
+	})
+
+	return err
+}

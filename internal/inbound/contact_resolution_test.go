@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
+	"github.com/webitel/webitel-emails/internal/event"
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
@@ -206,7 +207,8 @@ func TestManualContactDecisionWinsAutomaticResolution(t *testing.T) {
 			"a@x.com": {Outcome: contactsinfra.OutcomeResolved, ContactID: 42},
 		},
 		beforeReturn: func() {
-			applied, err := fake.EmailThreadStore().SetContactManually(
+			// The fake thread store also stands for the contact store of the operator.
+			applied, err := fakeThreadStore{fake}.SetContactManually(
 				context.Background(), 1, 70, fake.threads[0].ID, &manualID,
 			)
 			if err != nil || !applied {
@@ -226,5 +228,36 @@ func TestManualContactDecisionWinsAutomaticResolution(t *testing.T) {
 	}
 	if thread.ContactResolutionState != model.EmailContactResolutionResolved {
 		t.Fatalf("resolution state = %q, want resolved", thread.ContactResolutionState)
+	}
+}
+
+// A second completion of a ready Message may still resolve its contact: that change
+// gets its own Workspace event, and a repeat of it none.
+func TestLateContactResolutionIsToldToWorkspace(t *testing.T) {
+	fake := newFakeStore()
+	handler := testHandlerWithContacts(fake, &fakeContacts{err: errors.New("contacts unavailable")})
+	email := testEmail("<m1@x>", false, "raw-1", 10, 5)
+	if err := handler.Handle(context.Background(), email); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	thread, message := fake.threads[0], fake.messages[0]
+	stored := storedMessage{ID: message.ID, ThreadID: thread.ID, ThreadKind: thread.Kind,
+		ContactResolution: model.EmailContactResolutionUnavailable}
+	contactID := int64(99)
+	resolved := &contactResolution{State: model.EmailContactResolutionResolved, ContactID: &contactID}
+	for range 2 {
+		if err := handler.completer.markReady(context.Background(), email, stored, resolved, handler.log); err != nil {
+			t.Fatalf("mark ready: %v", err)
+		}
+	}
+
+	if len(fake.workspace) != 2 || fake.workspace[0].EventType != event.TypeWorkspaceMessageCreated ||
+		fake.workspace[1].EventType != event.TypeWorkspaceThreadChanged ||
+		len(fake.workspace[1].Changes) != 1 || fake.workspace[1].Changes[0] != event.WorkspaceChangeContact {
+		t.Fatalf("workspace changes = %+v", fake.workspace)
+	}
+	if thread.ContactID == nil || *thread.ContactID != 99 {
+		t.Fatalf("contact = %v", thread.ContactID)
 	}
 }
