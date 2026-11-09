@@ -233,15 +233,18 @@ func (c *Consumer) settle(
 		return c.reject(d, log, "service_thread", errors.New("a service thread is never projected"))
 	case store.EmailThreadProjectionApplied:
 		c.stats.applied(time.Since(snapshot.OccurredAt))
-		log.Debug("attempt snapshot applied",
-			"last_handled_applied", result.HandledApplied, "participant_recorded", result.ParticipantRecorded)
+		log.Debug("attempt snapshot applied", "last_handled_applied", result.HandledApplied,
+			"participant_recorded", result.ParticipantRecorded, "action_recorded", result.ActionRecorded)
 	default:
 		c.stats.stale()
-		log.Debug("attempt snapshot is not newer than the thread",
-			"last_handled_applied", result.HandledApplied, "participant_recorded", result.ParticipantRecorded)
+		log.Debug("attempt snapshot is not newer than the thread", "last_handled_applied", result.HandledApplied,
+			"participant_recorded", result.ParticipantRecorded, "action_recorded", result.ActionRecorded)
 	}
 	if result.ParticipantRecorded {
 		c.stats.participant()
+	}
+	if result.ActionRecorded {
+		c.stats.action()
 	}
 
 	if err := d.Ack(false); err != nil {
@@ -286,6 +289,7 @@ func (c *Consumer) reportLoop(ctx context.Context) {
 			"stale", r.stale,
 			"rejected", r.rejected,
 			"participants_recorded", r.participants,
+			"actions_recorded", r.actions,
 			"last_lag", r.lastLag.Round(time.Millisecond),
 			"max_lag", r.maxLag.Round(time.Millisecond),
 		)
@@ -304,7 +308,7 @@ type stats struct {
 
 type report struct {
 	applied, stale, rejected int64
-	participants             int64
+	participants, actions    int64
 	lastLag, maxLag          time.Duration
 }
 
@@ -326,6 +330,12 @@ func (s *stats) participant() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.report.participants++
+}
+
+func (s *stats) action() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.report.actions++
 }
 
 func (s *stats) rejected() {

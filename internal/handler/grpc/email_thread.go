@@ -128,6 +128,34 @@ func (s *EmailThreadsServer) GetEmailAttachmentLink(
 	return &emailpb.GetEmailAttachmentLinkResponse{Url: link, ExpiresAt: unixMilli(expiresAt)}, nil
 }
 
+// ListEmailThreadActions returns one page of the recorded transitions of a Thread
+// the caller may see.
+func (s *EmailThreadsServer) ListEmailThreadActions(
+	ctx context.Context,
+	req *emailpb.ListEmailThreadActionsRequest,
+) (*emailpb.EmailThreadActionList, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	actions, nextCursor, err := s.reads.ListActions(ctx, session.DomainID, session.UserID, service.EmailThreadActionListRequest{
+		ThreadID: req.GetThreadId(),
+		Size:     req.GetSize(),
+		Cursor:   req.GetCursor(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*emailpb.EmailThreadAction, 0, len(actions))
+	for _, action := range actions {
+		items = append(items, emailThreadActionToProto(action))
+	}
+
+	return &emailpb.EmailThreadActionList{Items: items, Next: nextCursor != "", NextCursor: nextCursor}, nil
+}
+
 // LocateEmailThreadMessage returns one email of a Thread the caller may see.
 func (s *EmailThreadsServer) LocateEmailThreadMessage(
 	ctx context.Context,

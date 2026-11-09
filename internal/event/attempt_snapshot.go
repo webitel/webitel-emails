@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -21,6 +22,19 @@ const (
 // active attempt; it carries no attempt.
 const TransitionInboundReopened = "inbound_reopened"
 
+// Transitions of an Email Transfer: the transferred attempt and the one created for the Thread.
+const (
+	TransitionReturned        = "returned"
+	TransitionTransferred     = "transferred"
+	TransitionTransferCreated = "transfer_created"
+)
+
+// SourceEngine marks a command of an operator.
+const SourceEngine = "engine"
+
+// MaxCommentLength is the longest reason or comment of an operator, in characters.
+const MaxCommentLength = 500
+
 // Attempt states of call_center.
 const (
 	AttemptStateWaiting    = "waiting"
@@ -35,6 +49,7 @@ const (
 const (
 	AttemptResultProcessed         = "processed"
 	AttemptResultProcessingTimeout = "processing_timeout"
+	AttemptResultTransfer          = "transfer"
 )
 
 var errInvalidSnapshot = errors.New("event: invalid attempt snapshot")
@@ -42,11 +57,11 @@ var errInvalidSnapshot = errors.New("event: invalid attempt snapshot")
 var (
 	attemptTransitions = set("created", "assigned", "taken", "postponed", "resumed", "woken", "queued", "reopened",
 		"deadline_woken", "deadline_queued", "returned", "auto_released", "logged_out", "processing_started",
-		"renewed", "completed", "processing_timeout")
+		"renewed", "completed", "processing_timeout", TransitionTransferred, TransitionTransferCreated)
 	attemptStates = set(AttemptStateWaiting, AttemptStateOffering, AttemptStateActive, AttemptStatePostponed,
 		AttemptStateProcessing, AttemptStateLeaving)
-	attemptResults = set(AttemptResultProcessed, AttemptResultProcessingTimeout)
-	attemptSources = set("engine", "flow", "system")
+	attemptResults = set(AttemptResultProcessed, AttemptResultProcessingTimeout, AttemptResultTransfer)
+	attemptSources = set(SourceEngine, "flow", "system")
 )
 
 // AttemptSnapshot is the cc.email.attempt.snapshot envelope: the whole attempt
@@ -72,6 +87,12 @@ type AttemptSnapshot struct {
 	AgentID        *int64     `json:"agent_id"`
 	AgentUserID    *int64     `json:"agent_user_id"`
 	PostponedUntil *time.Time `json:"postponed_until"`
+
+	// Set by engine commands only: the author, the reason or comment, and the target of a transfer.
+	ActorUserID       *int64  `json:"actor_user_id"`
+	Comment           *string `json:"comment"`
+	TransferToQueueID *int64  `json:"transfer_to_queue_id"`
+	TransferToUserID  *int64  `json:"transfer_to_user_id"`
 }
 
 // IsMarker reports whether the snapshot opens a Thread without an attempt.
@@ -98,6 +119,9 @@ func (e AttemptSnapshot) Validate() error {
 		return fmt.Errorf("%w: agent_id and agent_user_id must be set together", errInvalidSnapshot)
 	case e.AgentID != nil && (*e.AgentID <= 0 || *e.AgentUserID <= 0):
 		return fmt.Errorf("%w: non-positive agent_id or agent_user_id", errInvalidSnapshot)
+	}
+	if err := e.validateCommand(); err != nil {
+		return err
 	}
 
 	if e.IsMarker() {
@@ -130,6 +154,32 @@ func (e AttemptSnapshot) Validate() error {
 		return fmt.Errorf("%w: postponed_until must be set only for %s", errInvalidSnapshot, AttemptStatePostponed)
 	case state == AttemptStateWaiting && e.AgentID != nil:
 		return fmt.Errorf("%w: %s attempt has an agent", errInvalidSnapshot, AttemptStateWaiting)
+	case (e.Transition == TransitionTransferred) != (e.Result != nil && *e.Result == AttemptResultTransfer):
+		return fmt.Errorf("%w: result %s belongs to %s only", errInvalidSnapshot, AttemptResultTransfer, TransitionTransferred)
+	case e.Transition == TransitionTransferCreated && state != AttemptStateWaiting && state != AttemptStateOffering:
+		return fmt.Errorf("%w: %s in state %s", errInvalidSnapshot, TransitionTransferCreated, state)
+	}
+
+	return nil
+}
+
+// validateCommand checks the fields only engine commands carry.
+func (e AttemptSnapshot) validateCommand() error {
+	transferred := e.Transition == TransitionTransferred
+	switch {
+	case e.ActorUserID != nil && (e.Source != SourceEngine || *e.ActorUserID <= 0):
+		return fmt.Errorf("%w: actor_user_id outside a command of engine", errInvalidSnapshot)
+	case e.Comment != nil && (e.Source != SourceEngine ||
+		(e.Transition != TransitionReturned && !transferred)):
+		return fmt.Errorf("%w: comment outside a return or transfer of engine", errInvalidSnapshot)
+	case e.Comment != nil && (*e.Comment == "" || utf8.RuneCountInString(*e.Comment) > MaxCommentLength):
+		return fmt.Errorf("%w: comment must have 1 to %d characters", errInvalidSnapshot, MaxCommentLength)
+	case transferred != (e.TransferToQueueID != nil || e.TransferToUserID != nil):
+		return fmt.Errorf("%w: a transfer target belongs to %s only", errInvalidSnapshot, TransitionTransferred)
+	case e.TransferToQueueID != nil && e.TransferToUserID != nil:
+		return fmt.Errorf("%w: transfer_to_queue_id and transfer_to_user_id are exclusive", errInvalidSnapshot)
+	case (e.TransferToQueueID != nil && *e.TransferToQueueID <= 0) || (e.TransferToUserID != nil && *e.TransferToUserID <= 0):
+		return fmt.Errorf("%w: non-positive transfer target", errInvalidSnapshot)
 	}
 
 	return nil

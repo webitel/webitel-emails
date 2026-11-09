@@ -26,6 +26,7 @@ const (
 	EmailThreads_ListEmailThreadMessages_FullMethodName  = "/webitel.email.EmailThreads/ListEmailThreadMessages"
 	EmailThreads_LocateEmailThreadMessage_FullMethodName = "/webitel.email.EmailThreads/LocateEmailThreadMessage"
 	EmailThreads_GetEmailAttachmentLink_FullMethodName   = "/webitel.email.EmailThreads/GetEmailAttachmentLink"
+	EmailThreads_ListEmailThreadActions_FullMethodName   = "/webitel.email.EmailThreads/ListEmailThreadActions"
 )
 
 // EmailThreadsClient is the client API for EmailThreads service.
@@ -56,6 +57,9 @@ type EmailThreadsClient interface {
 	// GetEmailAttachmentLink returns a short-lived download link to a stored
 	// attachment of a visible email.
 	GetEmailAttachmentLink(ctx context.Context, in *GetEmailAttachmentLinkRequest, opts ...grpc.CallOption) (*GetEmailAttachmentLinkResponse, error)
+	// ListEmailThreadActions returns the recorded transitions of a visible
+	// conversation, oldest first.
+	ListEmailThreadActions(ctx context.Context, in *ListEmailThreadActionsRequest, opts ...grpc.CallOption) (*EmailThreadActionList, error)
 }
 
 type emailThreadsClient struct {
@@ -136,6 +140,16 @@ func (c *emailThreadsClient) GetEmailAttachmentLink(ctx context.Context, in *Get
 	return out, nil
 }
 
+func (c *emailThreadsClient) ListEmailThreadActions(ctx context.Context, in *ListEmailThreadActionsRequest, opts ...grpc.CallOption) (*EmailThreadActionList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailThreadActionList)
+	err := c.cc.Invoke(ctx, EmailThreads_ListEmailThreadActions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmailThreadsServer is the server API for EmailThreads service.
 // All implementations must embed UnimplementedEmailThreadsServer
 // for forward compatibility.
@@ -164,6 +178,9 @@ type EmailThreadsServer interface {
 	// GetEmailAttachmentLink returns a short-lived download link to a stored
 	// attachment of a visible email.
 	GetEmailAttachmentLink(context.Context, *GetEmailAttachmentLinkRequest) (*GetEmailAttachmentLinkResponse, error)
+	// ListEmailThreadActions returns the recorded transitions of a visible
+	// conversation, oldest first.
+	ListEmailThreadActions(context.Context, *ListEmailThreadActionsRequest) (*EmailThreadActionList, error)
 	mustEmbedUnimplementedEmailThreadsServer()
 }
 
@@ -194,6 +211,9 @@ func (UnimplementedEmailThreadsServer) LocateEmailThreadMessage(context.Context,
 }
 func (UnimplementedEmailThreadsServer) GetEmailAttachmentLink(context.Context, *GetEmailAttachmentLinkRequest) (*GetEmailAttachmentLinkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetEmailAttachmentLink not implemented")
+}
+func (UnimplementedEmailThreadsServer) ListEmailThreadActions(context.Context, *ListEmailThreadActionsRequest) (*EmailThreadActionList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEmailThreadActions not implemented")
 }
 func (UnimplementedEmailThreadsServer) mustEmbedUnimplementedEmailThreadsServer() {}
 func (UnimplementedEmailThreadsServer) testEmbeddedByValue()                      {}
@@ -342,6 +362,24 @@ func _EmailThreads_GetEmailAttachmentLink_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmailThreads_ListEmailThreadActions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEmailThreadActionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).ListEmailThreadActions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_ListEmailThreadActions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).ListEmailThreadActions(ctx, req.(*ListEmailThreadActionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmailThreads_ServiceDesc is the grpc.ServiceDesc for EmailThreads service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -376,6 +414,10 @@ var EmailThreads_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetEmailAttachmentLink",
 			Handler:    _EmailThreads_GetEmailAttachmentLink_Handler,
+		},
+		{
+			MethodName: "ListEmailThreadActions",
+			Handler:    _EmailThreads_ListEmailThreadActions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -43,11 +43,31 @@ func TestAttemptSnapshotValidate(t *testing.T) {
 		{"leaving attempt", func(e *AttemptSnapshot) {
 			e.Transition, e.AttemptState, e.Result = "completed", ptr(AttemptStateLeaving), ptr(AttemptResultProcessed)
 		}, true},
-		{"unknown transition", func(e *AttemptSnapshot) { e.Transition = "transferred" }, false},
+		{"unknown transition", func(e *AttemptSnapshot) { e.Transition = "parked" }, false},
 		{"unknown state", func(e *AttemptSnapshot) { e.AttemptState = ptr("parked") }, false},
 		{"unknown result", func(e *AttemptSnapshot) {
-			e.AttemptState, e.Result = ptr(AttemptStateLeaving), ptr("transfer")
+			e.AttemptState, e.Result = ptr(AttemptStateLeaving), ptr("lost")
 		}, false},
+		{"transferred to a queue", transferred(func(e *AttemptSnapshot) {}), true},
+		{"transferred to a user", transferred(func(e *AttemptSnapshot) { e.TransferToQueueID, e.TransferToUserID = nil, ptr(int64(80)) }), true},
+		{"transferred without a target", transferred(func(e *AttemptSnapshot) { e.TransferToQueueID = nil }), false},
+		{"transferred to both", transferred(func(e *AttemptSnapshot) { e.TransferToUserID = ptr(int64(80)) }), false},
+		{"transferred not leaving", transferred(func(e *AttemptSnapshot) { e.AttemptState, e.Result = ptr(AttemptStateActive), nil }), false},
+		{"transfer result elsewhere", func(e *AttemptSnapshot) {
+			e.Transition, e.AttemptState, e.Result = "completed", ptr(AttemptStateLeaving), ptr(AttemptResultTransfer)
+		}, false},
+		{"target outside a transfer", func(e *AttemptSnapshot) { e.TransferToQueueID = ptr(int64(4)) }, false},
+		{"long comment", transferred(func(e *AttemptSnapshot) { e.Comment = ptr(string(make([]rune, MaxCommentLength+1))) }), false},
+		{"comment of another transition", func(e *AttemptSnapshot) { e.Comment = ptr("note") }, false},
+		{"return with its reason", func(e *AttemptSnapshot) {
+			e.Transition, e.AttemptState, e.AgentID, e.AgentUserID = TransitionReturned, ptr(AttemptStateWaiting), nil, nil
+			e.ActorUserID, e.Comment = ptr(int64(70)), ptr("busy")
+		}, true},
+		{"actor of the system", func(e *AttemptSnapshot) { e.Source, e.ActorUserID = "system", ptr(int64(70)) }, false},
+		{"created by a transfer", func(e *AttemptSnapshot) {
+			e.Transition, e.AttemptState, e.AgentID, e.AgentUserID = TransitionTransferCreated, ptr(AttemptStateWaiting), nil, nil
+		}, true},
+		{"created by a transfer in work", func(e *AttemptSnapshot) { e.Transition = TransitionTransferCreated }, false},
 		{"leaving without result", func(e *AttemptSnapshot) { e.AttemptState = ptr(AttemptStateLeaving) }, false},
 		{"result outside leaving", func(e *AttemptSnapshot) { e.Result = ptr(AttemptResultProcessed) }, false},
 		{"postponed without deadline", func(e *AttemptSnapshot) { e.AttemptState = ptr(AttemptStatePostponed) }, false},
@@ -84,6 +104,15 @@ func TestAttemptSnapshotValidate(t *testing.T) {
 			t.Fatalf("marker with an attempt: %v", err)
 		}
 	})
+}
+
+// transferred is a valid transfer of the attempt to queue 4, changed by edit.
+func transferred(edit func(*AttemptSnapshot)) func(*AttemptSnapshot) {
+	return func(e *AttemptSnapshot) {
+		e.Transition, e.AttemptState, e.Result = TransitionTransferred, ptr(AttemptStateLeaving), ptr(AttemptResultTransfer)
+		e.ActorUserID, e.Comment, e.TransferToQueueID = ptr(int64(70)), ptr("to sales"), ptr(int64(4))
+		edit(e)
+	}
 }
 
 func TestUnmarshalAttemptSnapshot(t *testing.T) {

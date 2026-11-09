@@ -18,6 +18,12 @@ func Project(e event.AttemptSnapshot) (*store.EmailThreadProjection, error) {
 		Version:    e.ProjectionVersion,
 		OccurredAt: e.OccurredAt,
 		QueueID:    e.QueueID,
+		Action: store.EmailThreadAction{
+			Transition: e.Transition, Source: e.Source, AttemptID: e.AttemptID, AttemptState: e.AttemptState,
+			Result: e.Result, QueueID: e.QueueID, AgentID: e.AgentID, AgentUserID: e.AgentUserID,
+			ActorUserID: e.ActorUserID, TransferToQueueID: e.TransferToQueueID, TransferToUserID: e.TransferToUserID,
+			Comment: e.Comment,
+		},
 	}
 
 	// The marker opens the Thread without an attempt and keeps the last handled agent.
@@ -32,6 +38,14 @@ func Project(e event.AttemptSnapshot) (*store.EmailThreadProjection, error) {
 
 	switch *e.AttemptState {
 	case event.AttemptStateLeaving:
+		// A transferred attempt leaves the Thread New: the new attempt follows it, nothing is completed.
+		if e.Result != nil && *e.Result == event.AttemptResultTransfer {
+			p.Status = model.EmailThreadStatusNew
+			p.HandledAgentID, p.HandledUserID = e.AgentID, e.AgentUserID
+			p.ParticipantAgentID, p.ParticipantUserID = e.AgentID, e.AgentUserID
+
+			return p, nil
+		}
 		completedAt := e.OccurredAt
 		p.Status = model.EmailThreadStatusProcessed
 		p.CompletedAt = &completedAt

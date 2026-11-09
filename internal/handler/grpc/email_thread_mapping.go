@@ -112,6 +112,23 @@ func emailThreadToProto(view *model.EmailThreadView) *emailpb.EmailThread {
 	return out
 }
 
+func emailThreadActionToProto(action *model.EmailThreadActionView) *emailpb.EmailThreadAction {
+	return &emailpb.EmailThreadAction{
+		ProjectionVersion: action.ProjectionVersion,
+		OccurredAt:        unixMilli(action.OccurredAt),
+		Transition:        action.Transition,
+		AttemptState:      action.AttemptState,
+		Result:            action.Result,
+		Source:            action.Source,
+		Actor:             lookupToProto(action.Actor),
+		Agent:             lookupToProto(action.Agent),
+		QueueId:           int64Value(action.QueueID),
+		TransferToQueueId: int64Value(action.TransferToQueueID),
+		TransferToUser:    lookupToProto(action.TransferToUser),
+		Comment:           action.Comment,
+	}
+}
+
 func invalidThreadFilter(message string) error {
 	return kiterrors.InvalidArgument(message, kiterrors.WithID("email.thread.invalid_filter"))
 }

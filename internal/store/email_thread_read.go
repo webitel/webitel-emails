@@ -39,4 +39,7 @@ type EmailThreadReadStore interface {
 		ctx context.Context,
 		domainID, userID, threadID, messageID, attachmentID int64,
 	) (*model.EmailAttachmentView, error)
+	// ListActions returns a page of the action journal of a visible Thread; an
+	// invisible Thread yields an empty page.
+	ListActions(ctx context.Context, filter model.EmailThreadActionFilter) ([]*model.EmailThreadActionView, bool, error)
 }

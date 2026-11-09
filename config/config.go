@@ -32,6 +32,7 @@ type Config struct {
 	InboundEvent        InboundEventConfig        `mapstructure:"inbound_event"`
 	Outbox              OutboxConfig              `mapstructure:"outbox"`
 	ThreadProjection    ThreadProjectionConfig    `mapstructure:"thread_projection"`
+	ThreadAction        ThreadActionConfig        `mapstructure:"thread_action"`
 }
 
 // OutboxConfig tunes publication of Outbox events to RabbitMQ.
@@ -63,6 +64,12 @@ type ThreadProjectionConfig struct {
 	RetryMaxInterval     time.Duration `mapstructure:"retry_max_interval"`
 	// ReportInterval is how often the applied, stale and rejected counts are logged.
 	ReportInterval time.Duration `mapstructure:"report_interval"`
+}
+
+// ThreadActionConfig keeps the action journal of Threads.
+type ThreadActionConfig struct {
+	// Retention is how long an action is kept; 0 keeps every action.
+	Retention time.Duration `mapstructure:"retention"`
 }
 
 // InboundEventConfig bounds the snapshot carried by the event that starts Flow.
@@ -274,6 +281,8 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("thread_projection.retry_initial_interval", time.Second, "first pause after a RabbitMQ or database failure")
 	flags.Duration("thread_projection.retry_max_interval", 30*time.Second, "longest pause after repeated RabbitMQ or database failures")
 	flags.Duration("thread_projection.report_interval", time.Minute, "how often the applied, stale and rejected snapshots are logged")
+
+	flags.Duration("thread_action.retention", 0, "how long a Thread action is kept; 0 keeps every action")
 }
 
 func (c *Config) validate() error {
@@ -312,6 +321,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.ThreadProjection.validate(); err != nil {
 		return err
+	}
+	if c.ThreadAction.Retention < 0 {
+		return fmt.Errorf("config: thread_action.retention must not be negative")
 	}
 
 	if err := c.validateMigrate(); err != nil {
