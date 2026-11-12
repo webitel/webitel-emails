@@ -28,6 +28,9 @@ var Module = fx.Module(
 type Broker struct {
 	conn      *rabbitmq.Connection
 	publisher *rabbitmq.MessagePublisher
+	// workspace publishes without mandatory: its key names a user, and a user
+	// without an open socket has no bound queue, as for calls and chats.
+	workspace *rabbitmq.MessagePublisher
 }
 
 // New connects lazily: an unavailable RabbitMQ neither fails startup nor blocks
@@ -51,25 +54,38 @@ func New(cfg *config.Config, log *slog.Logger, lifecycle fx.Lifecycle) (*Broker,
 	}
 
 	// One attempt per call: retries and pauses belong to the Outbox relay.
-	publisherConfig, err := rabbitmq.NewPublisherConfig(
-		rabbitmq.WithConfirmation(true),
-		rabbitmq.WithPublisherConfirmationTimeout(cfg.Outbox.PublishTimeout),
-		rabbitmq.WithPublisherMaxRetries(1),
-		rabbitmq.WithPersistentDelivery(true),
-		rabbitmq.WithMandatory(true),
-	)
-	if err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("rabbitmq: create publisher config: %w", err)
+	newPublisher := func(mandatory bool) (*rabbitmq.MessagePublisher, error) {
+		publisherConfig, err := rabbitmq.NewPublisherConfig(
+			rabbitmq.WithConfirmation(true),
+			rabbitmq.WithPublisherConfirmationTimeout(cfg.Outbox.PublishTimeout),
+			rabbitmq.WithPublisherMaxRetries(1),
+			rabbitmq.WithPersistentDelivery(true),
+			rabbitmq.WithMandatory(mandatory),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("rabbitmq: create publisher config: %w", err)
+		}
+		publisher, err := rabbitmq.NewPublisher(connection, publisherConfig, logger)
+		if err != nil {
+			return nil, fmt.Errorf("rabbitmq: create publisher: %w", err)
+		}
+
+		return publisher, nil
 	}
 
-	publisher, err := rabbitmq.NewPublisher(connection, publisherConfig, logger)
+	publisher, err := newPublisher(true)
 	if err != nil {
 		_ = connection.Close()
-		return nil, fmt.Errorf("rabbitmq: create publisher: %w", err)
+		return nil, err
+	}
+	workspace, err := newPublisher(false)
+	if err != nil {
+		_ = publisher.Close()
+		_ = connection.Close()
+		return nil, err
 	}
 
-	broker := &Broker{conn: connection, publisher: publisher}
+	broker := &Broker{conn: connection, publisher: publisher, workspace: workspace}
 
 	lifecycle.Append(fx.Hook{
 		OnStop: func(context.Context) error {
@@ -96,18 +112,22 @@ func (b *Broker) DeclareTopology(ctx context.Context) error {
 }
 
 // Publish sends the stored payload untouched; success means the broker confirmed
-// it and routed it to a queue.
+// it and, except for a Workspace event, routed it to a queue.
 func (b *Broker) Publish(ctx context.Context, outboxEvent *model.OutboxEvent) error {
 	headers := amqp.Table{
 		event.HeaderEventID:       outboxEvent.EventID.String(),
 		event.HeaderEventType:     outboxEvent.EventType,
 		event.HeaderSchemaVersion: outboxEvent.SchemaVersion,
 	}
+	publisher := b.publisher
+	if event.IsWorkspaceEvent(outboxEvent) {
+		publisher = b.workspace
+	}
 
-	return b.publisher.Publish(ctx, outboxEvent.Exchange, outboxEvent.RoutingKey, outboxEvent.Payload, headers)
+	return publisher.Publish(ctx, outboxEvent.Exchange, outboxEvent.RoutingKey, outboxEvent.Payload, headers)
 }
 
-// Close stops the publisher before the connection it runs on.
+// Close stops the publishers before the connection they run on.
 func (b *Broker) Close() error {
-	return errors.Join(b.publisher.Close(), b.conn.Close())
+	return errors.Join(b.publisher.Close(), b.workspace.Close(), b.conn.Close())
 }

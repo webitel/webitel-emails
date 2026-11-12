@@ -19,6 +19,7 @@ type fakeStore struct {
 	attachments    map[int64][]*model.EmailMessageAttachment
 	failures       []*model.InboundFailure
 	outbox         []*model.OutboxEvent
+	workspace      []store.EmailWorkspaceChange
 	flowID         *int64
 	nextID         int64
 	calls          []string
@@ -79,6 +80,10 @@ func (f *fakeStore) EmailMessageAttachmentStore() store.EmailMessageAttachmentSt
 
 func (f *fakeStore) InboundFailureStore() store.InboundFailureStore { return fakeFailureStore{f} }
 func (f *fakeStore) OutboxStore() store.OutboxStore                 { return fakeOutboxStore{f} }
+
+func (f *fakeStore) EmailWorkspaceEventStore() store.EmailWorkspaceEventStore {
+	return fakeWorkspaceStore{f}
+}
 
 func (f *fakeStore) EmailProfileRoutingStore() store.EmailProfileRoutingStore {
 	return fakeRoutingStore{f}
@@ -250,6 +255,9 @@ func (f fakeThreadStore) ResolveContact(
 			thread.ContactResolutionState != model.EmailContactResolutionUnavailable {
 			return false, nil
 		}
+		if thread.ContactResolutionState == state && equalContact(thread.ContactID, contactID) {
+			return false, nil
+		}
 		thread.ContactResolutionState = state
 		thread.ContactID = contactID
 
@@ -333,24 +341,24 @@ func (f fakeMessageStore) Create(_ context.Context, message *model.EmailMessage)
 func (f fakeMessageStore) MarkReady(
 	_ context.Context,
 	_, messageID int64,
-) (model.EmailMessageState, error) {
+) (model.EmailMessageState, bool, error) {
 	f.record("mark_ready")
 
 	message := f.messageByID(messageID)
 	if message == nil {
-		return "", nil
+		return "", false, nil
 	}
 	if message.State != model.EmailMessageStateProcessing {
-		return message.State, nil
+		return message.State, false, nil
 	}
 	for _, attachment := range f.attachments[messageID] {
 		if attachment.State == model.EmailAttachmentStatePending {
-			return model.EmailMessageStateProcessing, nil
+			return model.EmailMessageStateProcessing, false, nil
 		}
 	}
 	message.State = model.EmailMessageStateReady
 
-	return message.State, nil
+	return message.State, true, nil
 }
 
 func (f fakeMessageStore) MarkFailed(_ context.Context, _, messageID int64) (bool, error) {
@@ -493,6 +501,15 @@ func (f fakeFailureStore) Record(_ context.Context, failure *model.InboundFailur
 	return nil
 }
 
+type fakeWorkspaceStore struct{ *fakeStore }
+
+func (f fakeWorkspaceStore) Record(_ context.Context, change store.EmailWorkspaceChange) (int, error) {
+	f.record("record_workspace")
+	f.workspace = append(f.workspace, change)
+
+	return 0, nil
+}
+
 type fakeOutboxStore struct{ *fakeStore }
 
 var _ store.OutboxStore = fakeOutboxStore{}
@@ -539,4 +556,8 @@ var _ store.EmailProfileRoutingStore = fakeRoutingStore{}
 
 func (f fakeRoutingStore) FlowID(context.Context, int64, int64) (*int64, error) {
 	return f.flowID, nil
+}
+
+func equalContact(a, b *int64) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }

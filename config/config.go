@@ -33,6 +33,7 @@ type Config struct {
 	Outbox              OutboxConfig              `mapstructure:"outbox"`
 	ThreadProjection    ThreadProjectionConfig    `mapstructure:"thread_projection"`
 	ThreadAction        ThreadActionConfig        `mapstructure:"thread_action"`
+	WorkspaceEvents     WorkspaceEventsConfig     `mapstructure:"workspace_events"`
 }
 
 // OutboxConfig tunes publication of Outbox events to RabbitMQ.
@@ -70,6 +71,12 @@ type ThreadProjectionConfig struct {
 type ThreadActionConfig struct {
 	// Retention is how long an action is kept; 0 keeps every action.
 	Retention time.Duration `mapstructure:"retention"`
+}
+
+// WorkspaceEventsConfig controls the events that tell Workspace a Thread changed.
+type WorkspaceEventsConfig struct {
+	// Enabled writes new events; written ones are published either way.
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // InboundEventConfig bounds the snapshot carried by the event that starts Flow.
@@ -283,6 +290,8 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("thread_projection.report_interval", time.Minute, "how often the applied, stale and rejected snapshots are logged")
 
 	flags.Duration("thread_action.retention", 0, "how long a Thread action is kept; 0 keeps every action")
+
+	flags.Bool("workspace_events.enabled", false, "write the events that tell Workspace a Thread changed")
 }
 
 func (c *Config) validate() error {

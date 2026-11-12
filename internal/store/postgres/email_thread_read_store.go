@@ -57,6 +57,7 @@ SELECT t.id, t.profile_id, p.name AS profile_name, t.subject, t.status, t.status
     t.current_user_id, coalesce(nullif(cu.name, ''), cu.username::text, '') AS current_user_name,
     t.last_handled_user_id, coalesce(nullif(hu.name, ''), hu.username::text, '') AS last_handled_user_name,
     ` + threadAccessExpr + ` AS access, t.current_attempt_id, t.current_attempt_version,
+    t.projection_version, t.workspace_version,
     pv.id AS preview_id, pv.direction AS preview_direction, pv.received_at AS preview_received_at,
     pv.text AS preview_text, pv.from_address AS preview_from_address, pv.from_name AS preview_from_name
 FROM email.thread t
@@ -213,6 +214,8 @@ type emailThreadViewRecord struct {
 	Access                 string     `db:"access"`
 	CurrentAttemptID       *int64     `db:"current_attempt_id"`
 	CurrentAttemptVersion  *int64     `db:"current_attempt_version"`
+	ProjectionVersion      *int64     `db:"projection_version"`
+	WorkspaceVersion       int64      `db:"workspace_version"`
 	PreviewID              *int64     `db:"preview_id"`
 	PreviewDirection       *string    `db:"preview_direction"`
 	PreviewReceivedAt      *time.Time `db:"preview_received_at"`
@@ -239,6 +242,8 @@ func (r *emailThreadViewRecord) toModel() *model.EmailThreadView {
 		CurrentUser:            userLookup(r.CurrentUserID, r.CurrentUserName),
 		LastHandledUser:        userLookup(r.LastHandledUserID, r.LastHandledUserName),
 		Access:                 model.EmailThreadAccess(r.Access),
+		ProjectionVersion:      r.ProjectionVersion,
+		WorkspaceVersion:       r.WorkspaceVersion,
 	}
 	// The attempt matters only to the agent who may act on it.
 	if view.Access == model.EmailThreadAccessCurrent {

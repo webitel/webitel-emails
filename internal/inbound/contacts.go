@@ -77,8 +77,9 @@ func (u *MessageCompleter) resolveContact(
 	}
 }
 
-// storeResolution writes the outcome in the caller's transaction. A write that
-// applies to no row means an operator decided meanwhile, which always wins.
+// storeResolution writes the outcome in the caller's transaction and tells whether
+// the Thread changed. A write that applies to no row means an operator decided
+// meanwhile, which always wins, or the Thread already holds this outcome.
 func (u *MessageCompleter) storeResolution(
 	ctx context.Context,
 	uow store.UnitOfWork,
@@ -86,22 +87,22 @@ func (u *MessageCompleter) storeResolution(
 	message storedMessage,
 	resolution *contactResolution,
 	log *slog.Logger,
-) error {
+) (bool, error) {
 	if resolution == nil {
-		return nil
+		return false, nil
 	}
 
 	applied, err := uow.EmailThreadStore().ResolveContact(
 		ctx, parsed.DomainID, message.ThreadID, resolution.State, resolution.ContactID,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !applied {
-		log.Info("contact resolution skipped, the conversation was already decided",
+		log.Info("contact resolution skipped, the conversation was decided or holds this outcome",
 			"thread_id", message.ThreadID, "state", resolution.State)
 
-		return nil
+		return false, nil
 	}
 
 	log.Info("contact resolution stored",
@@ -110,5 +111,5 @@ func (u *MessageCompleter) storeResolution(
 		"contact_id", resolution.ContactID,
 	)
 
-	return nil
+	return true, nil
 }

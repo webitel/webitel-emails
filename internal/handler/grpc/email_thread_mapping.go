@@ -96,6 +96,8 @@ func emailThreadToProto(view *model.EmailThreadView) *emailpb.EmailThread {
 		Access:                 threadAccessToProto[view.Access],
 		CurrentAttemptId:       int64Value(view.CurrentAttemptID),
 		CurrentAttemptVersion:  int64Value(view.CurrentAttemptVersion),
+		ProjectionVersion:      int64Value(view.ProjectionVersion),
+		WorkspaceVersion:       view.WorkspaceVersion,
 	}
 	if preview := view.Preview; preview != nil {
 		out.Preview = &emailpb.EmailThreadPreview{

@@ -43,17 +43,18 @@ func TestContactResolutionStoreUsesFirstMessageAndProtectsTenant(t *testing.T) {
 	assignThread(t, db, threadID, "in_progress", 70)
 
 	manualID := int64(42)
-	applied, err := store.SetContactManually(ctx, 2, 70, threadID, &manualID)
+	contacts := storepostgres.NewEmailThreadContactStore(db, false)
+	applied, err := contacts.SetContactManually(ctx, 2, 70, threadID, &manualID)
 	if err != nil || applied {
 		t.Fatalf("foreign-domain manual bind = %v, %v; want false", applied, err)
 	}
-	applied, err = store.SetContactManually(ctx, 1, 71, threadID, &manualID)
+	applied, err = contacts.SetContactManually(ctx, 1, 71, threadID, &manualID)
 	if err != nil || applied {
 		t.Fatalf("manual bind by another user = %v, %v; want false", applied, err)
 	}
 	assertStoredContact(t, db, threadID, nil, model.EmailContactResolutionPending)
 
-	applied, err = store.SetContactManually(ctx, 1, 70, threadID, &manualID)
+	applied, err = contacts.SetContactManually(ctx, 1, 70, threadID, &manualID)
 	if err != nil || !applied {
 		t.Fatalf("manual bind = %v, %v; want true", applied, err)
 	}

@@ -38,4 +38,6 @@ type UnitOfWork interface {
 	EmailProfileRoutingStore() EmailProfileRoutingStore
 	// OutboxStore writes broker events; it works only inside WithinTransaction.
 	OutboxStore() OutboxStore
+	// EmailWorkspaceEventStore records Workspace changes; only inside WithinTransaction.
+	EmailWorkspaceEventStore() EmailWorkspaceEventStore
 }

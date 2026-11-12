@@ -192,11 +192,12 @@ func (u *MessageCompleter) markReady(
 			return err
 		}
 
-		if err := u.storeResolution(ctx, uow, parsed, message, resolution, log); err != nil {
+		contactChanged, err := u.storeResolution(ctx, uow, parsed, message, resolution, log)
+		if err != nil {
 			return err
 		}
 
-		state, err := uow.EmailMessageStore().MarkReady(ctx, parsed.DomainID, message.ID)
+		state, completed, err := uow.EmailMessageStore().MarkReady(ctx, parsed.DomainID, message.ID)
 		if err != nil {
 			return err
 		}
@@ -211,7 +212,7 @@ func (u *MessageCompleter) markReady(
 		if state != model.EmailMessageStateReady {
 			log.Debug("email message was already finished elsewhere", "state", state)
 
-			return nil
+			return recordContactChanged(ctx, uow, parsed.DomainID, message.ThreadID, contactChanged)
 		}
 
 		if err := uow.EmailThreadStore().AdvanceLastMessage(
@@ -222,6 +223,16 @@ func (u *MessageCompleter) markReady(
 
 		// Also reached when a concurrent delivery finished it; the dedup key keeps one event.
 		if err := u.events.Write(ctx, uow, parsed.DomainID, message.ID); err != nil {
+			return err
+		}
+
+		// The completing call tells about the Message, which covers its contact;
+		// another call that changed the contact tells about that alone.
+		if completed {
+			if err := recordMessageCreated(ctx, uow, parsed.DomainID, message.ThreadID, message.ID); err != nil {
+				return err
+			}
+		} else if err := recordContactChanged(ctx, uow, parsed.DomainID, message.ThreadID, contactChanged); err != nil {
 			return err
 		}
 

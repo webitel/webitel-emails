@@ -943,8 +943,14 @@ type EmailThread struct {
 	CurrentAttemptId      int64               `protobuf:"varint,17,opt,name=current_attempt_id,json=currentAttemptId,proto3" json:"current_attempt_id,omitempty"`
 	CurrentAttemptVersion int64               `protobuf:"varint,18,opt,name=current_attempt_version,json=currentAttemptVersion,proto3" json:"current_attempt_version,omitempty"`
 	Preview               *EmailThreadPreview `protobuf:"bytes,19,opt,name=preview,proto3" json:"preview,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Read metadata of the CURRENT and HISTORY views; zero means none yet.
+	// projection_version is the newest applied call_center snapshot;
+	// workspace_version grows with every change visible here. Compare each only
+	// with itself for one Thread.
+	ProjectionVersion int64 `protobuf:"varint,20,opt,name=projection_version,json=projectionVersion,proto3" json:"projection_version,omitempty"`
+	WorkspaceVersion  int64 `protobuf:"varint,21,opt,name=workspace_version,json=workspaceVersion,proto3" json:"workspace_version,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *EmailThread) Reset() {
@@ -1108,6 +1114,20 @@ func (x *EmailThread) GetPreview() *EmailThreadPreview {
 		return x.Preview
 	}
 	return nil
+}
+
+func (x *EmailThread) GetProjectionVersion() int64 {
+	if x != nil {
+		return x.ProjectionVersion
+	}
+	return 0
+}
+
+func (x *EmailThread) GetWorkspaceVersion() int64 {
+	if x != nil {
+		return x.WorkspaceVersion
+	}
+	return 0
 }
 
 // ListEmailThreadsRequest selects a page of the caller's conversations.
@@ -2277,7 +2297,7 @@ const file_thread_proto_rawDesc = "" +
 	"\x04from\x18\x03 \x01(\v2\x1b.webitel.email.EmailAddressR\x04from\x12\x12\n" +
 	"\x04text\x18\x04 \x01(\tR\x04text\x12\x1f\n" +
 	"\vreceived_at\x18\x05 \x01(\x03R\n" +
-	"receivedAt\"\xe8\x06\n" +
+	"receivedAt\"\xc4\a\n" +
 	"\vEmailThread\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12)\n" +
 	"\aprofile\x18\x02 \x01(\v2\x0f.general.LookupR\aprofile\x12\x18\n" +
@@ -2301,7 +2321,9 @@ const file_thread_proto_rawDesc = "" +
 	"\x06access\x18\x10 \x01(\x0e2 .webitel.email.EmailThreadAccessR\x06access\x12,\n" +
 	"\x12current_attempt_id\x18\x11 \x01(\x03R\x10currentAttemptId\x126\n" +
 	"\x17current_attempt_version\x18\x12 \x01(\x03R\x15currentAttemptVersion\x12;\n" +
-	"\apreview\x18\x13 \x01(\v2!.webitel.email.EmailThreadPreviewR\apreview\"\x93\x02\n" +
+	"\apreview\x18\x13 \x01(\v2!.webitel.email.EmailThreadPreviewR\apreview\x12-\n" +
+	"\x12projection_version\x18\x14 \x01(\x03R\x11projectionVersion\x12+\n" +
+	"\x11workspace_version\x18\x15 \x01(\x03R\x10workspaceVersion\"\x93\x02\n" +
 	"\x17ListEmailThreadsRequest\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\x05R\x04page\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x05R\x04size\x12\x12\n" +

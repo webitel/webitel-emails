@@ -304,8 +304,8 @@ func (s *testMessageStore) Create(context.Context, *model.EmailMessage) (*model.
 
 func (s *testMessageStore) MarkReady(
 	context.Context, int64, int64,
-) (model.EmailMessageState, error) {
-	return model.EmailMessageStateReady, nil
+) (model.EmailMessageState, bool, error) {
+	return model.EmailMessageStateReady, true, nil
 }
 
 func (s *testMessageStore) MarkFailed(context.Context, int64, int64) (bool, error) {

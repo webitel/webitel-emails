@@ -9,12 +9,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/webitel/webitel-emails/internal/event"
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
 type emailThreadProjectionStore struct {
-	db Database
+	db              Database
+	workspaceEvents bool
 }
 
 var _ store.EmailThreadProjectionStore = (*emailThreadProjectionStore)(nil)
@@ -22,6 +24,13 @@ var _ store.EmailThreadProjectionStore = (*emailThreadProjectionStore)(nil)
 // NewEmailThreadProjectionStore creates the store the snapshot consumer writes through.
 func NewEmailThreadProjectionStore(db Database) *emailThreadProjectionStore {
 	return &emailThreadProjectionStore{db: db}
+}
+
+// WithWorkspaceEvents turns on writing the Workspace events of applied snapshots.
+func (s *emailThreadProjectionStore) WithWorkspaceEvents(enabled bool) *emailThreadProjectionStore {
+	s.workspaceEvents = enabled
+
+	return s
 }
 
 // Apply updates the projection and the last handled agent in one transaction;
@@ -35,7 +44,7 @@ func (s *emailThreadProjectionStore) Apply(
 		return store.EmailThreadProjectionResult{}, fmt.Errorf("store: begin transaction: %w", err)
 	}
 
-	result, err := applyProjection(ctx, tx, p)
+	result, err := applyProjection(ctx, tx, p, s.workspaceEvents)
 	if err != nil {
 		if rbErr := rollback(ctx, tx); rbErr != nil {
 			return result, fmt.Errorf("%w (rollback: %v)", err, rbErr)
@@ -51,8 +60,34 @@ func (s *emailThreadProjectionStore) Apply(
 	return result, nil
 }
 
-func applyProjection(ctx context.Context, tx pgx.Tx, p *store.EmailThreadProjection) (store.EmailThreadProjectionResult, error) {
+func applyProjection(
+	ctx context.Context,
+	tx pgx.Tx,
+	p *store.EmailThreadProjection,
+	workspaceEvents bool,
+) (store.EmailThreadProjectionResult, error) {
 	var result store.EmailThreadProjectionResult
+
+	// The row lock comes first even for a stale snapshot: it orders this change
+	// against ready Messages and contacts, and gives the user it replaces.
+	var (
+		kind         string
+		previousUser *int64
+	)
+	err := tx.QueryRow(ctx, `SELECT kind, current_user_id FROM email.thread WHERE domain_id = $1 AND id = $2 FOR UPDATE`,
+		p.DomainID, p.ThreadID).Scan(&kind, &previousUser)
+	switch {
+	case stderrors.Is(err, pgx.ErrNoRows):
+		result.Outcome = store.EmailThreadProjectionNotFound
+
+		return result, nil
+	case err != nil:
+		return result, fmt.Errorf("store: lock projected thread: %w", err)
+	case kind == string(model.EmailThreadKindService):
+		result.Outcome = store.EmailThreadProjectionService
+
+		return result, nil
+	}
 
 	// Every field is written, so a value the snapshot no longer carries is cleared;
 	// SET reads the old status, so the change time moves only with the status.
@@ -96,11 +131,11 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 	}
 
 	if p.ParticipantUserID != nil && p.ParticipantAgentID != nil {
-		recorded, err := recordParticipant(ctx, tx, p)
+		recorded, added, err := recordParticipant(ctx, tx, p)
 		if err != nil {
 			return result, err
 		}
-		result.ParticipantRecorded = recorded
+		result.ParticipantRecorded, result.ParticipantAdded = recorded, added
 	}
 
 	recorded, err := recordAction(ctx, tx, p)
@@ -109,25 +144,32 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 	}
 	result.ActionRecorded = recorded
 
+	result.Outcome = store.EmailThreadProjectionStale
 	if applied {
 		result.Outcome = store.EmailThreadProjectionApplied
+	}
 
+	// A repeated snapshot that changed nothing visible raises no version.
+	var changes []string
+	if applied || result.HandledApplied {
+		changes = append(changes, event.WorkspaceChangeProjection)
+	}
+	if result.ParticipantAdded {
+		changes = append(changes, event.WorkspaceChangeParticipants)
+	}
+	if result.ActionRecorded {
+		changes = append(changes, event.WorkspaceChangeActions)
+	}
+	if len(changes) == 0 {
 		return result, nil
 	}
 
-	// One read tells a repeated or older snapshot from one with no Thread to land on.
-	var kind string
-	err = tx.QueryRow(ctx, `SELECT kind FROM email.thread WHERE domain_id = $1 AND id = $2`,
-		p.DomainID, p.ThreadID).Scan(&kind)
-	switch {
-	case stderrors.Is(err, pgx.ErrNoRows):
-		result.Outcome = store.EmailThreadProjectionNotFound
-	case err != nil:
-		return result, fmt.Errorf("store: read projected thread: %w", err)
-	case kind == string(model.EmailThreadKindService):
-		result.Outcome = store.EmailThreadProjectionService
-	default:
-		result.Outcome = store.EmailThreadProjectionStale
+	result.WorkspaceEvents, err = recordWorkspaceChange(ctx, tx, workspaceEvents, store.EmailWorkspaceChange{
+		DomainID: p.DomainID, ThreadID: p.ThreadID, EventType: event.TypeWorkspaceThreadChanged,
+		Changes: changes, PreviousUserID: previousUser, OccurredAt: time.Now(),
+	})
+	if err != nil {
+		return result, err
 	}
 
 	return result, nil
@@ -135,7 +177,8 @@ WHERE domain_id = $1 AND id = $2 AND kind = 'regular' AND coalesce(last_handled_
 
 // recordParticipant adds the agent of a Take-proving snapshot to the journal of a
 // regular Thread; versions and times only widen, so order does not matter.
-func recordParticipant(ctx context.Context, tx pgx.Tx, p *store.EmailThreadProjection) (bool, error) {
+// The second result tells a new row from widened versions.
+func recordParticipant(ctx context.Context, tx pgx.Tx, p *store.EmailThreadProjection) (bool, bool, error) {
 	const record = `
 INSERT INTO email.thread_participant AS tp (
     domain_id, thread_id, user_id, agent_id,
@@ -153,15 +196,20 @@ ON CONFLICT (domain_id, thread_id, user_id) DO UPDATE SET
     updated_at = now()
 WHERE tp.first_version IS NULL
    OR EXCLUDED.first_version < tp.first_version
-   OR EXCLUDED.last_version > tp.last_version`
+   OR EXCLUDED.last_version > tp.last_version
+RETURNING xmax = 0`
 
-	tag, err := tx.Exec(ctx, record,
-		p.DomainID, p.ThreadID, p.ParticipantUserID, p.ParticipantAgentID, p.Version, p.OccurredAt)
-	if err != nil {
-		return false, projectionError("record participant", err)
+	var added bool
+	err := tx.QueryRow(ctx, record,
+		p.DomainID, p.ThreadID, p.ParticipantUserID, p.ParticipantAgentID, p.Version, p.OccurredAt).Scan(&added)
+	switch {
+	case stderrors.Is(err, pgx.ErrNoRows):
+		return false, false, nil
+	case err != nil:
+		return false, false, projectionError("record participant", err)
 	}
 
-	return tag.RowsAffected() == 1, nil
+	return true, added, nil
 }
 
 // recordAction keeps one journal row per snapshot of a regular Thread, so a repeated

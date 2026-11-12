@@ -228,7 +228,7 @@ func TestMarkReadyWaitsForEveryPart(t *testing.T) {
 		t.Fatalf("read message: %v", err)
 	}
 
-	state, err := messages.MarkReady(ctx, 1, messageID)
+	state, _, err := messages.MarkReady(ctx, 1, messageID)
 	if err != nil {
 		t.Fatalf("MarkReady: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestMarkReadyWaitsForEveryPart(t *testing.T) {
 	if stored, err := attachments.MarkStored(ctx, 1, messageID, 0, 777); err != nil || !stored {
 		t.Fatalf("MarkStored(0) = %v, %v", stored, err)
 	}
-	state, err = messages.MarkReady(ctx, 1, messageID)
+	state, _, err = messages.MarkReady(ctx, 1, messageID)
 	if err != nil {
 		t.Fatalf("MarkReady: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestMarkReadyWaitsForEveryPart(t *testing.T) {
 	if stored, err := attachments.MarkStored(ctx, 1, messageID, 1, 778); err != nil || !stored {
 		t.Fatalf("MarkStored(1) = %v, %v", stored, err)
 	}
-	state, err = messages.MarkReady(ctx, 1, messageID)
+	state, _, err = messages.MarkReady(ctx, 1, messageID)
 	if err != nil {
 		t.Fatalf("MarkReady: %v", err)
 	}

@@ -86,6 +86,10 @@ type EmailThreadProjectionResult struct {
 	ParticipantRecorded bool
 	// ActionRecorded reports that the action journal gained the row of this snapshot.
 	ActionRecorded bool
+	// ParticipantAdded reports a new participant, which changes who sees the Thread.
+	ParticipantAdded bool
+	// WorkspaceEvents counts the Workspace events written with the snapshot.
+	WorkspaceEvents int
 }
 
 // EmailThreadProjectionStore applies attempt snapshots to Threads. Only a

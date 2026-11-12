@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	stderrors "errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/webitel/webitel-emails/internal/event"
 	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/store"
 )
@@ -122,7 +124,8 @@ LIMIT 1`
 }
 
 // ResolveContact writes the resolution outcome under the states that still allow
-// it, so a late automatic answer cannot replace what an operator chose.
+// it, so a late automatic answer cannot replace what an operator chose. The same
+// outcome again is no change and is not applied.
 func (s *emailThreadStore) ResolveContact(
 	ctx context.Context,
 	domainID, threadID int64,
@@ -135,7 +138,8 @@ UPDATE email.thread SET
     contact_resolution_state = $5,
     updated_at = now()
 WHERE domain_id = $1 AND id = $2 AND kind = $3
-    AND contact_resolution_state IN ('pending', 'unavailable')`
+    AND contact_resolution_state IN ('pending', 'unavailable')
+    AND (contact_id IS DISTINCT FROM $4 OR contact_resolution_state IS DISTINCT FROM $5)`
 
 	result, err := s.db.Exec(
 		ctx,
@@ -153,31 +157,95 @@ WHERE domain_id = $1 AND id = $2 AND kind = $3
 	return result.RowsAffected() > 0, nil
 }
 
-// SetContactManually may correct any state; the update repeats the visibility and
-// assignment conditions, so it is the final check. Regular Threads only.
-func (s *emailThreadStore) SetContactManually(
+// setContactManually may correct any state; the update repeats the visibility and
+// assignment conditions, so it is the final check. Regular Threads only. It also tells
+// whether the contact or its state really changed.
+func setContactManually(
 	ctx context.Context,
+	q Querier,
 	domainID, userID, threadID int64,
 	contactID *int64,
-) (bool, error) {
+) (applied, changed bool, err error) {
 	query := `
+WITH old AS (
+    SELECT t.contact_id, t.contact_resolution_state
+    FROM email.thread t
+    WHERE t.domain_id = @domain_id AND t.id = @thread_id
+    FOR UPDATE
+)
 UPDATE email.thread t SET
     contact_id = @contact_id,
     contact_resolution_state = CASE WHEN @contact_id::bigint IS NULL THEN 'unlinked' ELSE 'resolved' END,
-    updated_at = now()
-WHERE t.id = @thread_id AND ` + visibleThread(model.EmailThreadAssignmentCurrent) + ` AND ` + threadAssigned
+    -- The same decision again is no change: updated_at orders the list without an event.
+    updated_at = CASE
+        WHEN old.contact_id IS DISTINCT FROM @contact_id::bigint
+            OR old.contact_resolution_state IS DISTINCT FROM
+                CASE WHEN @contact_id::bigint IS NULL THEN 'unlinked' ELSE 'resolved' END
+        THEN now() ELSE t.updated_at END
+FROM old
+WHERE t.id = @thread_id AND ` + visibleThread(model.EmailThreadAssignmentCurrent) + ` AND ` + threadAssigned + `
+RETURNING old.contact_id IS DISTINCT FROM t.contact_id
+    OR old.contact_resolution_state IS DISTINCT FROM t.contact_resolution_state`
 
-	result, err := s.db.Exec(ctx, query, pgx.NamedArgs{
+	err = q.QueryRow(ctx, query, pgx.NamedArgs{
 		"domain_id":  domainID,
 		"user_id":    userID,
 		"thread_id":  threadID,
 		"contact_id": nullableInt64(contactID),
-	})
-	if err != nil {
-		return false, ParseError(err)
+	}).Scan(&changed)
+	switch {
+	case stderrors.Is(err, pgx.ErrNoRows):
+		return false, false, nil
+	case err != nil:
+		return false, false, ParseError(err)
 	}
 
-	return result.RowsAffected() > 0, nil
+	return true, changed, nil
+}
+
+type emailThreadContactStore struct {
+	db              Database
+	workspaceEvents bool
+}
+
+var _ store.EmailThreadContactStore = (*emailThreadContactStore)(nil)
+
+// NewEmailThreadContactStore creates the store of operator contact decisions.
+func NewEmailThreadContactStore(db Database, workspaceEvents bool) *emailThreadContactStore {
+	return &emailThreadContactStore{db: db, workspaceEvents: workspaceEvents}
+}
+
+// SetContactManually writes the contact and, when it changed, its Workspace event.
+func (s *emailThreadContactStore) SetContactManually(
+	ctx context.Context,
+	domainID, userID, threadID int64,
+	contactID *int64,
+) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, fmt.Errorf("store: begin transaction: %w", err)
+	}
+
+	applied, changed, err := setContactManually(ctx, tx, domainID, userID, threadID, contactID)
+	if err == nil && changed {
+		_, err = recordWorkspaceChange(ctx, tx, s.workspaceEvents, store.EmailWorkspaceChange{
+			DomainID: domainID, ThreadID: threadID, EventType: event.TypeWorkspaceThreadChanged,
+			Changes: []string{event.WorkspaceChangeContact}, OccurredAt: time.Now(),
+		})
+	}
+	if err != nil {
+		if rbErr := rollback(ctx, tx); rbErr != nil {
+			return false, fmt.Errorf("%w (rollback: %v)", err, rbErr)
+		}
+
+		return false, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("store: commit transaction: %w", err)
+	}
+
+	return applied, nil
 }
 
 // FirstSenderAddress takes the sender of the earliest message of the Thread by

@@ -118,7 +118,7 @@ WHERE m.domain_id = $1 AND m.profile_id = $2
 func (s *emailMessageStore) MarkReady(
 	ctx context.Context,
 	domainID, messageID int64,
-) (model.EmailMessageState, error) {
+) (model.EmailMessageState, bool, error) {
 	// The state is read back in the same statement, so a message a concurrent
 	// delivery has just completed is not mistaken for an unfinished one.
 	const query = `
@@ -136,14 +136,17 @@ WITH completed AS (
 SELECT COALESCE(
     (SELECT state FROM completed),
     (SELECT state FROM email.message WHERE domain_id = $1 AND id = $2)
-)`
+), EXISTS (SELECT 1 FROM completed)`
 
-	var state sql.NullString
-	if err := s.db.QueryRow(ctx, query, domainID, messageID).Scan(&state); err != nil {
-		return "", ParseError(err)
+	var (
+		state     sql.NullString
+		completed bool
+	)
+	if err := s.db.QueryRow(ctx, query, domainID, messageID).Scan(&state, &completed); err != nil {
+		return "", false, ParseError(err)
 	}
 
-	return model.EmailMessageState(state.String), nil
+	return model.EmailMessageState(state.String), completed, nil
 }
 
 func (s *emailMessageStore) MarkFailed(ctx context.Context, domainID, messageID int64) (bool, error) {
