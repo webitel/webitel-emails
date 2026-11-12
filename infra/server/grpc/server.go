@@ -45,6 +45,7 @@ func New(
 	}
 
 	options := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(int(cfg.Service.MaxRecvMsgSize)),
 		grpc.ChainUnaryInterceptor(
 			kitinterceptors.UnaryServerErrorInterceptor(),
 			interceptors.NewUnaryAuthInterceptor(authManager),

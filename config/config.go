@@ -34,7 +34,42 @@ type Config struct {
 	ThreadProjection    ThreadProjectionConfig    `mapstructure:"thread_projection"`
 	ThreadAction        ThreadActionConfig        `mapstructure:"thread_action"`
 	WorkspaceEvents     WorkspaceEventsConfig     `mapstructure:"workspace_events"`
+	Outbound            OutboundConfig            `mapstructure:"outbound"`
 }
+
+// OutboundConfig controls outbound email.
+type OutboundConfig struct {
+	// Enabled opens the outbound API; accepted emails are delivered either way.
+	Enabled              bool  `mapstructure:"enabled"`
+	MaxAttachmentSize    int64 `mapstructure:"max_attachment_size"`
+	MaxConcurrentUploads int   `mapstructure:"max_concurrent_uploads"`
+	// AttachmentReferenceTTL is how long an unused upload may still be attached.
+	AttachmentReferenceTTL   time.Duration `mapstructure:"attachment_reference_ttl"`
+	ReferenceCleanupInterval time.Duration `mapstructure:"reference_cleanup_interval"`
+
+	MaxRecipients           int   `mapstructure:"max_recipients"`
+	MaxBodySize             int64 `mapstructure:"max_body_size"`
+	MaxAttachments          int   `mapstructure:"max_attachments"`
+	MaxAttachmentsTotalSize int64 `mapstructure:"max_attachments_total_size"`
+	// MaxMessageSize bounds the encoded MIME email.
+	MaxMessageSize int64 `mapstructure:"max_message_size"`
+
+	DeliveryTickInterval    time.Duration `mapstructure:"delivery_tick_interval"`
+	MaxConcurrentDeliveries int           `mapstructure:"max_concurrent_deliveries"`
+	MaxDeliveriesPerProfile int           `mapstructure:"max_deliveries_per_profile"`
+	// SMTP timeouts: each command before DATA, each write of the body, and the
+	// reply to the final dot (RFC 5321 4.5.3.2); DeliverySendTimeout bounds them all.
+	SMTPCommandTimeout    time.Duration `mapstructure:"smtp_command_timeout"`
+	SMTPDataTimeout       time.Duration `mapstructure:"smtp_data_timeout"`
+	SMTPFinalReplyTimeout time.Duration `mapstructure:"smtp_final_reply_timeout"`
+	DeliverySendTimeout   time.Duration `mapstructure:"delivery_send_timeout"`
+	// DeliveryLease outlives a send, so recovery never takes a running one.
+	DeliveryLease            time.Duration `mapstructure:"delivery_lease"`
+	DeliveryRecoveryInterval time.Duration `mapstructure:"delivery_recovery_interval"`
+}
+
+// maxUploadOverhead is the room an upload request needs beyond its file.
+const maxUploadOverhead = 64 << 10
 
 // OutboxConfig tunes publication of Outbox events to RabbitMQ.
 type OutboxConfig struct {
@@ -170,6 +205,8 @@ type OAuthConfig struct {
 type ServiceConfig struct {
 	Addr       string             `mapstructure:"addr"`
 	Connection appconfig.GRPCConn `mapstructure:"conn"`
+	// MaxRecvMsgSize bounds one incoming gRPC message, an attachment upload included.
+	MaxRecvMsgSize int64 `mapstructure:"max_recv_msg_size"`
 }
 
 // LoadServerConfig loads configuration for the long-running service process,
@@ -235,6 +272,7 @@ func LoadMigrateConfig(args []string) (*Config, error) {
 
 func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.String("service.addr", "localhost:8080", "gRPC listen and advertised address")
+	flags.Int64("service.max_recv_msg_size", 16<<20, "maximum incoming gRPC message size in bytes")
 	appconfig.RegisterGRPCConnFlags(flags, "service.conn", true)
 	flags.String("oauth.redirect_url", "", "public OAuth callback URL exposed through API Gateway")
 
@@ -292,6 +330,26 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("thread_action.retention", 0, "how long a Thread action is kept; 0 keeps every action")
 
 	flags.Bool("workspace_events.enabled", false, "write the events that tell Workspace a Thread changed")
+
+	flags.Bool("outbound.enabled", false, "accept outbound emails and their attachments")
+	flags.Int64("outbound.max_attachment_size", 10<<20, "maximum size of one outbound attachment in bytes")
+	flags.Int("outbound.max_concurrent_uploads", 10, "maximum outbound attachment uploads running at the same time on one instance")
+	flags.Duration("outbound.attachment_reference_ttl", 24*time.Hour, "how long an uploaded attachment may still be attached")
+	flags.Duration("outbound.reference_cleanup_interval", time.Hour, "how often expired unused attachment uploads are removed")
+	flags.Int("outbound.max_recipients", 50, "maximum To, Cc and Bcc addresses of one outbound email")
+	flags.Int64("outbound.max_body_size", 1<<20, "maximum size of each HTML or plain-text body of an outbound email in bytes")
+	flags.Int("outbound.max_attachments", 15, "maximum attachments of one outbound email")
+	flags.Int64("outbound.max_attachments_total_size", 20<<20, "maximum total attachment size of one outbound email in bytes")
+	flags.Int64("outbound.max_message_size", 30<<20, "maximum encoded size of one outbound email in bytes")
+	flags.Duration("outbound.delivery_tick_interval", time.Second, "how often pending outbound emails are claimed")
+	flags.Int("outbound.max_concurrent_deliveries", 8, "maximum outbound emails sent at the same time on one instance")
+	flags.Int("outbound.max_deliveries_per_profile", 2, "maximum outbound emails of one profile sent at the same time on one instance")
+	flags.Duration("outbound.smtp_command_timeout", time.Minute, "timeout of each SMTP command before DATA")
+	flags.Duration("outbound.smtp_data_timeout", 3*time.Minute, "timeout of each write of the email body")
+	flags.Duration("outbound.smtp_final_reply_timeout", 10*time.Minute, "how long the reply to the end of the email is awaited")
+	flags.Duration("outbound.delivery_send_timeout", 15*time.Minute, "maximum time of one SMTP send")
+	flags.Duration("outbound.delivery_lease", 20*time.Minute, "how long a claimed email belongs to its worker")
+	flags.Duration("outbound.delivery_recovery_interval", time.Minute, "how often abandoned sends are finished")
 }
 
 func (c *Config) validate() error {
@@ -333,6 +391,9 @@ func (c *Config) validate() error {
 	}
 	if c.ThreadAction.Retention < 0 {
 		return fmt.Errorf("config: thread_action.retention must not be negative")
+	}
+	if err := c.validateOutbound(); err != nil {
+		return err
 	}
 
 	if err := c.validateMigrate(); err != nil {
@@ -524,6 +585,38 @@ func validateAMQPURL(rawURL string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("config: pubsub.url must include a host")
+	}
+
+	return nil
+}
+
+func (c *Config) validateOutbound() error {
+	o := c.Outbound
+	switch {
+	case c.Service.MaxRecvMsgSize <= 0 || c.Service.MaxRecvMsgSize > math.MaxInt32:
+		return fmt.Errorf("config: service.max_recv_msg_size must be between 1 and %d", math.MaxInt32)
+	case o.MaxAttachmentSize <= 0:
+		return fmt.Errorf("config: outbound.max_attachment_size must be positive")
+	case o.MaxAttachmentSize > c.Service.MaxRecvMsgSize-maxUploadOverhead:
+		return fmt.Errorf("config: outbound.max_attachment_size plus %d bytes must not exceed service.max_recv_msg_size", maxUploadOverhead)
+	case o.MaxConcurrentUploads <= 0:
+		return fmt.Errorf("config: outbound.max_concurrent_uploads must be positive")
+	case o.AttachmentReferenceTTL <= 0:
+		return fmt.Errorf("config: outbound.attachment_reference_ttl must be positive")
+	case o.ReferenceCleanupInterval <= 0:
+		return fmt.Errorf("config: outbound.reference_cleanup_interval must be positive")
+	case o.MaxRecipients <= 0 || o.MaxBodySize <= 0 || o.MaxAttachments <= 0:
+		return fmt.Errorf("config: outbound.max_recipients, max_body_size and max_attachments must be positive")
+	case o.MaxAttachmentSize > o.MaxAttachmentsTotalSize || o.MaxAttachmentsTotalSize > o.MaxMessageSize:
+		return fmt.Errorf("config: outbound.max_attachment_size <= max_attachments_total_size <= max_message_size is required")
+	case o.DeliveryTickInterval <= 0 || o.DeliveryRecoveryInterval <= 0:
+		return fmt.Errorf("config: outbound.delivery_tick_interval and delivery_recovery_interval must be positive")
+	case o.MaxConcurrentDeliveries <= 0 || o.MaxDeliveriesPerProfile <= 0:
+		return fmt.Errorf("config: outbound.max_concurrent_deliveries and max_deliveries_per_profile must be positive")
+	case o.SMTPCommandTimeout <= 0 || o.SMTPDataTimeout <= 0 || o.SMTPFinalReplyTimeout <= 0 || o.DeliverySendTimeout <= 0:
+		return fmt.Errorf("config: outbound SMTP timeouts and delivery_send_timeout must be positive")
+	case o.DeliveryLease < o.DeliverySendTimeout+time.Minute:
+		return fmt.Errorf("config: outbound.delivery_lease must exceed delivery_send_timeout by at least 1m")
 	}
 
 	return nil

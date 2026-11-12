@@ -31,6 +31,7 @@ var emailProfileFields = []struct {
 	{"sender_name", []string{"p.sender_name"}},
 	{"reply_to", []string{"p.reply_to"}},
 	{"signature", []string{"p.signature"}},
+	{"allow_send", []string{"p.allow_send"}},
 	{"imap_host", []string{"p.imap_host"}},
 	{"imap_port", []string{"p.imap_port"}},
 	{"imap_security", []string{"p.imap_security"}},
@@ -133,6 +134,7 @@ type emailProfileRecord struct {
 	SenderName   string `db:"sender_name"`
 	ReplyTo      string `db:"reply_to"`
 	Signature    string `db:"signature"`
+	AllowSend    bool   `db:"allow_send"`
 
 	IMAPHost             string `db:"imap_host"`
 	IMAPPort             int32  `db:"imap_port"`
@@ -228,6 +230,7 @@ INSERT INTO email.profile (
     sender_name,
     reply_to,
     signature,
+    allow_send,
     imap_host,
     imap_port,
     imap_security,
@@ -254,6 +257,7 @@ INSERT INTO email.profile (
     @sender_name,
     @reply_to,
     @signature,
+    @allow_send,
     @imap_host,
     @imap_port,
     @imap_security,
@@ -294,6 +298,7 @@ UPDATE email.profile SET
     sender_name = @sender_name,
     reply_to = @reply_to,
     signature = @signature,
+    allow_send = COALESCE(@allow_send, allow_send),
     imap_host = @imap_host,
     imap_port = @imap_port,
     imap_security = @imap_security,
@@ -330,6 +335,7 @@ RETURNING *`
 	args := emailProfileWriteArgs(params.Profile)
 	args["domain_id"] = params.DomainID
 	args["id"] = params.ID
+	args["allow_send"] = params.AllowSend
 	args["password"] = params.Password
 	args["oauth_client_secret"] = params.OAuthClientSecret
 	args["user_id"] = nullIfZero(params.UserID)
@@ -347,6 +353,7 @@ func emailProfileWriteArgs(profile *model.EmailProfile) pgx.NamedArgs {
 		"sender_name":            profile.SenderName,
 		"reply_to":               profile.ReplyTo,
 		"signature":              profile.Signature,
+		"allow_send":             profile.AllowSend,
 		"imap_host":              profile.IMAPHost,
 		"imap_port":              profile.IMAPPort,
 		"imap_security":          profile.IMAPSecurity,
@@ -644,6 +651,7 @@ func mapEmailProfile(record *emailProfileRecord) *model.EmailProfile {
 		SenderName:                 record.SenderName,
 		ReplyTo:                    record.ReplyTo,
 		Signature:                  record.Signature,
+		AllowSend:                  record.AllowSend,
 		IMAPHost:                   record.IMAPHost,
 		IMAPPort:                   record.IMAPPort,
 		IMAPSecurity:               model.EmailConnectionSecurity(record.IMAPSecurity),

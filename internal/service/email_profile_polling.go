@@ -43,6 +43,36 @@ func (s *EmailProfileService) IMAPConnection(ctx context.Context, profile *model
 	return connection, nil
 }
 
+// SMTPConnection returns the SMTP settings of a profile with decrypted credentials
+// for background delivery.
+func (s *EmailProfileService) SMTPConnection(ctx context.Context, profile *model.EmailProfile) (mailinfra.SMTPConnection, error) {
+	connection := mailinfra.SMTPConnection{
+		Host:     profile.SMTPHost,
+		Port:     profile.SMTPPort,
+		Security: profile.SMTPSecurity,
+		Username: profile.Username,
+		AuthType: profile.AuthType,
+	}
+
+	if profile.AuthType == model.EmailAuthTypeOAuth2 {
+		accessToken, err := s.accessToken(ctx, profile.DomainID, profile.ID)
+		connection.AccessToken = accessToken
+
+		return connection, err
+	}
+
+	password, err := s.openBasicPassword(ctx, profile.DomainID, profile.ID)
+	if err != nil {
+		return mailinfra.SMTPConnection{}, err
+	}
+	if password == "" {
+		return mailinfra.SMTPConnection{}, invalidEmailProfile("password_required", "password is required")
+	}
+	connection.Password = password
+
+	return connection, nil
+}
+
 // RequiresReauthorization reports whether a credentials error can be fixed only by authorizing the profile again.
 func RequiresReauthorization(err error) bool {
 	return isOAuthReauthorizationRequired(err) || kiterrors.ID(err) == "email.profile.oauth_not_connected"

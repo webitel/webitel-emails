@@ -97,8 +97,9 @@ type EmailMessageStore interface {
 	// IncrementAttachmentAttempts counts one failed attempt to finish the
 	// attachments of a message and returns the new total.
 	IncrementAttachmentAttempts(ctx context.Context, domainID, messageID int64) (int32, error)
-	// LastReceivedAt returns when the newest ready message of a profile arrived,
-	// or the zero time when the profile has none. It is the fallback checkpoint
+	// LastReceivedAt returns when the newest ready inbound message of a profile
+	// arrived, or the zero time when the profile has none; a sent email says nothing
+	// about the mailbox. It is the fallback checkpoint
 	// for a cursor that predates recovery support.
 	LastReceivedAt(ctx context.Context, domainID, profileID int64) (time.Time, error)
 }

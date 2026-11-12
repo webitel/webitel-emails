@@ -2,6 +2,8 @@
 
 service:
   addr: "127.0.0.1:8080"
+  # Bounds one gRPC request; an outbound attachment upload must fit.
+  max_recv_msg_size: 16777216
   conn:
     # Certificate verification is enabled by default. Disable it only for local development.
     verify_certs: false
@@ -91,3 +93,25 @@ thread_projection:
   retry_initial_interval: 1s
   retry_max_interval: 30s
   report_interval: 1m
+
+# Outbound email; disabled until it is approved for operators.
+outbound:
+  enabled: false
+  max_attachment_size: 10485760
+  max_concurrent_uploads: 10
+  attachment_reference_ttl: 24h
+  reference_cleanup_interval: 1h
+  max_recipients: 50
+  max_body_size: 1048576
+  max_attachments: 15
+  max_attachments_total_size: 20971520
+  max_message_size: 31457280
+  delivery_tick_interval: 1s
+  max_concurrent_deliveries: 8
+  max_deliveries_per_profile: 2
+  smtp_command_timeout: 1m
+  smtp_data_timeout: 3m
+  smtp_final_reply_timeout: 10m
+  delivery_send_timeout: 15m
+  delivery_lease: 20m
+  delivery_recovery_interval: 1m

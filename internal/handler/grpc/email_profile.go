@@ -109,6 +109,12 @@ func (s *EmailProfilesServer) UpdateEmailProfile(
 		return nil, err
 	}
 
+	// Unset allow_send keeps the stored value; a missing input is refused by the service.
+	var allowSend *bool
+	if input := req.GetInput(); input != nil {
+		allowSend = input.AllowSend
+	}
+
 	profile, err := s.service.Update(ctx, service.UpdateEmailProfileInput{
 		DomainID:          session.DomainID,
 		UserID:            session.UserID,
@@ -116,6 +122,7 @@ func (s *EmailProfilesServer) UpdateEmailProfile(
 		Profile:           emailProfileFromProto(req.GetInput()),
 		Password:          req.GetInput().GetPassword(),
 		OAuthClientSecret: req.GetInput().GetOauthClientSecret(),
+		AllowSend:         allowSend,
 	})
 	if err != nil {
 		return nil, err

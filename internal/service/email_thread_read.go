@@ -9,6 +9,7 @@ import (
 	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
 
 	"github.com/webitel/webitel-emails/internal/model"
+	"github.com/webitel/webitel-emails/internal/outbound"
 	"github.com/webitel/webitel-emails/internal/store"
 )
 
@@ -90,6 +91,13 @@ func (s *EmailThreadReadService) LocateThread(
 		return nil, errThreadNotFound()
 	}
 	normalizePreview(view)
+
+	// Filled only for a Thread the caller sees, with the caller's own name.
+	agentName, err := s.threads.UserName(ctx, domainID, userID)
+	if err != nil {
+		return nil, err
+	}
+	view.ReplySignature = outbound.Signature(view.ProfileSignature, agentName)
 
 	return view, nil
 }

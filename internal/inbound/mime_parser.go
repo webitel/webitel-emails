@@ -349,10 +349,8 @@ func isAutoReply(header gomessage.Header) bool {
 	if isAffirmativeHeader(header.Get("X-Autoreply")) || isAffirmativeHeader(header.Get("X-Autorespond")) {
 		return true
 	}
-	if containsHeaderToken(header.Get("X-Auto-Response-Suppress"), "all", "autoreply", "auto-reply", "oof") {
-		return true
-	}
-
+	// X-Auto-Response-Suppress only asks the recipient not to answer automatically;
+	// Outlook sets it on ordinary emails too, so it marks nothing.
 	return containsHeaderToken(header.Get("Precedence"), "auto_reply", "auto-reply", "autoreply")
 }
 

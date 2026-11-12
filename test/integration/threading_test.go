@@ -321,8 +321,10 @@ func TestDeduplicationAcrossIdentities(t *testing.T) {
 		threadID := seedThread(t, db, 1, profileID, "regular", "new", nil)
 		if _, err := db.Exec(context.Background(), `
 INSERT INTO email.message (
-    domain_id, thread_id, profile_id, direction, state, message_id, received_at
-) VALUES (1, $1, $2, 'outbound', 'ready', '<direction@x>', now())`, threadID, profileID); err != nil {
+    domain_id, thread_id, profile_id, direction, state, message_id, received_at,
+    author_user_id, request_id, request_fingerprint, delivery_status, delivered_at
+) VALUES (1, $1, $2, 'outbound', 'ready', '<direction@x>', now(),
+    5, gen_random_uuid(), decode(repeat('ab', 32), 'hex'), 'sent', now())`, threadID, profileID); err != nil {
 			t.Fatalf("seed outbound message: %v", err)
 		}
 

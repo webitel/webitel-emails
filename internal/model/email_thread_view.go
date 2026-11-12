@@ -74,5 +74,10 @@ type EmailThreadView struct {
 	ProjectionVersion *int64
 	WorkspaceVersion  int64
 
+	// ProfileSignature is the template ReplySignature is filled from.
+	ProfileSignature string
+	// ReplySignature is filled for the caller by LocateThread only.
+	ReplySignature string
+
 	Preview *EmailThreadPreview
 }

@@ -259,8 +259,10 @@ type EmailProfile struct {
 	CreatedBy                  *Lookup                 `protobuf:"bytes,31,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
 	UpdatedAt                  int64                   `protobuf:"varint,32,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	UpdatedBy                  *Lookup                 `protobuf:"bytes,33,opt,name=updated_by,json=updatedBy,proto3" json:"updated_by,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// New emails may be sent from this profile.
+	AllowSend     bool `protobuf:"varint,34,opt,name=allow_send,json=allowSend,proto3" json:"allow_send,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EmailProfile) Reset() {
@@ -503,6 +505,13 @@ func (x *EmailProfile) GetUpdatedBy() *Lookup {
 	return nil
 }
 
+func (x *EmailProfile) GetAllowSend() bool {
+	if x != nil {
+		return x.AllowSend
+	}
+	return false
+}
+
 // InputEmailProfile contains fields accepted when a profile is created or
 // updated. Password and OAuth client secret are write-only API fields.
 type InputEmailProfile struct {
@@ -529,8 +538,10 @@ type InputEmailProfile struct {
 	OauthProvider        EmailOAuthProvider      `protobuf:"varint,20,opt,name=oauth_provider,json=oauthProvider,proto3,enum=webitel.email.EmailOAuthProvider" json:"oauth_provider,omitempty"`
 	OauthClientId        string                  `protobuf:"bytes,21,opt,name=oauth_client_id,json=oauthClientId,proto3" json:"oauth_client_id,omitempty"`
 	OauthClientSecret    string                  `protobuf:"bytes,22,opt,name=oauth_client_secret,json=oauthClientSecret,proto3" json:"oauth_client_secret,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// New emails may be sent from this profile; unset on update keeps the value.
+	AllowSend     *bool `protobuf:"varint,23,opt,name=allow_send,json=allowSend,proto3,oneof" json:"allow_send,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InputEmailProfile) Reset() {
@@ -715,6 +726,13 @@ func (x *InputEmailProfile) GetOauthClientSecret() string {
 		return x.OauthClientSecret
 	}
 	return ""
+}
+
+func (x *InputEmailProfile) GetAllowSend() bool {
+	if x != nil && x.AllowSend != nil {
+		return *x.AllowSend
+	}
+	return false
 }
 
 // ListEmailProfilesRequest defines pagination, search, sorting, and field
@@ -1398,7 +1416,7 @@ var File_profile_proto protoreflect.FileDescriptor
 
 const file_profile_proto_rawDesc = "" +
 	"\n" +
-	"\rprofile.proto\x12\rwebitel.email\x1a\rgeneral.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x1aproto/webitel/option.proto\"\xcf\t\n" +
+	"\rprofile.proto\x12\rwebitel.email\x1a\rgeneral.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x1aproto/webitel/option.proto\"\xee\t\n" +
 	"\fEmailProfile\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1b\n" +
 	"\tdomain_id\x18\x02 \x01(\x03R\bdomainId\x12\x12\n" +
@@ -1435,7 +1453,9 @@ const file_profile_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18  \x01(\x03R\tupdatedAt\x12.\n" +
 	"\n" +
-	"updated_by\x18! \x01(\v2\x0f.general.LookupR\tupdatedBy\"\xee\x06\n" +
+	"updated_by\x18! \x01(\v2\x0f.general.LookupR\tupdatedBy\x12\x1d\n" +
+	"\n" +
+	"allow_send\x18\" \x01(\bR\tallowSend\"\xa1\a\n" +
 	"\x11InputEmailProfile\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x18\n" +
@@ -1460,7 +1480,10 @@ const file_profile_proto_rawDesc = "" +
 	"\tauth_type\x18\x13 \x01(\x0e2\x1c.webitel.email.EmailAuthTypeR\bauthType\x12H\n" +
 	"\x0eoauth_provider\x18\x14 \x01(\x0e2!.webitel.email.EmailOAuthProviderR\roauthProvider\x12&\n" +
 	"\x0foauth_client_id\x18\x15 \x01(\tR\roauthClientId\x12.\n" +
-	"\x13oauth_client_secret\x18\x16 \x01(\tR\x11oauthClientSecret\"|\n" +
+	"\x13oauth_client_secret\x18\x16 \x01(\tR\x11oauthClientSecret\x12\"\n" +
+	"\n" +
+	"allow_send\x18\x17 \x01(\bH\x00R\tallowSend\x88\x01\x01B\r\n" +
+	"\v_allow_send\"|\n" +
 	"\x18ListEmailProfilesRequest\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\x05R\x04page\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x05R\x04size\x12\f\n" +
@@ -1613,6 +1636,7 @@ func file_profile_proto_init() {
 		return
 	}
 	file_general_proto_init()
+	file_profile_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

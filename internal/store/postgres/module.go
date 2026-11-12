@@ -66,5 +66,16 @@ var Module = fx.Module(
 			fx.From(new(*pgxpool.Pool)),
 			fx.As(new(store.InboundFailureStore)),
 		),
+		fx.Annotate(
+			func(pool *pgxpool.Pool, cfg *config.Config) *emailDeliveryStore {
+				return NewEmailDeliveryStore(pool, cfg.WorkspaceEvents.Enabled)
+			},
+			fx.As(new(store.EmailDeliveryStore)),
+		),
+		fx.Annotate(
+			NewEmailAttachmentUploadStore,
+			fx.From(new(*pgxpool.Pool)),
+			fx.As(new(store.EmailAttachmentUploadStore)),
+		),
 	),
 )

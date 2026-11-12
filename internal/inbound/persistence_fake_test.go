@@ -80,6 +80,7 @@ func (f *fakeStore) EmailMessageAttachmentStore() store.EmailMessageAttachmentSt
 
 func (f *fakeStore) InboundFailureStore() store.InboundFailureStore { return fakeFailureStore{f} }
 func (f *fakeStore) OutboxStore() store.OutboxStore                 { return fakeOutboxStore{f} }
+func (f *fakeStore) EmailOutboundStore() store.EmailOutboundStore   { return nil }
 
 func (f *fakeStore) EmailWorkspaceEventStore() store.EmailWorkspaceEventStore {
 	return fakeWorkspaceStore{f}

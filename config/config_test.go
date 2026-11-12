@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,7 +164,7 @@ postgres:
 
 func TestConfigValidate(t *testing.T) {
 	valid := Config{
-		Service:  ServiceConfig{Addr: "localhost:8080"},
+		Service:  ServiceConfig{Addr: "localhost:8080", MaxRecvMsgSize: 16 << 20},
 		Log:      appconfig.Log{Level: "info", Console: true},
 		Postgres: appconfig.Postgres{DSN: "postgres://localhost/webitel"},
 		Consul:   appconfig.Consul{Addr: "localhost:8500"},
@@ -219,6 +220,15 @@ func TestConfigValidate(t *testing.T) {
 			LinkTimeout:           5 * time.Second,
 			MaxConcurrentLinks:    8,
 		},
+		Outbound: OutboundConfig{
+			MaxAttachmentSize: 10 << 20, MaxConcurrentUploads: 10,
+			AttachmentReferenceTTL: 24 * time.Hour, ReferenceCleanupInterval: time.Hour,
+			MaxRecipients: 50, MaxBodySize: 1 << 20, MaxAttachments: 15,
+			MaxAttachmentsTotalSize: 20 << 20, MaxMessageSize: 30 << 20,
+			DeliveryTickInterval: time.Second, MaxConcurrentDeliveries: 8, MaxDeliveriesPerProfile: 2,
+			SMTPCommandTimeout: time.Minute, SMTPDataTimeout: 3 * time.Minute, SMTPFinalReplyTimeout: 10 * time.Minute,
+			DeliverySendTimeout: 15 * time.Minute, DeliveryLease: 20 * time.Minute, DeliveryRecoveryInterval: time.Minute,
+		},
 	}
 
 	tests := []struct {
@@ -242,6 +252,10 @@ func TestConfigValidate(t *testing.T) {
 		{name: "zero link timeout", mutate: func(c *Config) { c.Storage.LinkTimeout = 0 }, wantErr: "storage.link_timeout"},
 		{name: "zero concurrent links", mutate: func(c *Config) { c.Storage.MaxConcurrentLinks = 0 }, wantErr: "storage.max_concurrent_links"},
 		{name: "invalid attachment count", mutate: func(c *Config) { c.MIME.MaxAttachments = 0 }, wantErr: "mime.max_attachments"},
+		{name: "outbound attachment above the gRPC limit", mutate: func(c *Config) { c.Outbound.MaxAttachmentSize = 16 << 20 }, wantErr: "service.max_recv_msg_size"},
+		{name: "outbound attachment at the int64 limit", mutate: func(c *Config) { c.Outbound.MaxAttachmentSize = math.MaxInt64 }, wantErr: "service.max_recv_msg_size"},
+		{name: "delivery lease shorter than a send", mutate: func(c *Config) { c.Outbound.DeliveryLease = 15 * time.Minute }, wantErr: "delivery_lease"},
+		{name: "outbound attachments above the message limit", mutate: func(c *Config) { c.Outbound.MaxMessageSize = 10 << 20 }, wantErr: "max_message_size"},
 	}
 
 	for _, tt := range tests {

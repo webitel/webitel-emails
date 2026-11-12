@@ -51,7 +51,7 @@ WHERE t.id = @thread_id AND ` + visibleThread(model.EmailThreadAssignmentAll)
 // emailThreadViewSelect reads everything the read API shows; the caller appends a
 // WHERE with the visibility boundary. Names are joined within the domain.
 const emailThreadViewSelect = `
-SELECT t.id, t.profile_id, p.name AS profile_name, t.subject, t.status, t.status_changed_at,
+SELECT t.id, t.profile_id, p.name AS profile_name, p.signature AS profile_signature, t.subject, t.status, t.status_changed_at,
     t.created_at, t.updated_at, t.last_message_at, t.completed_at,
     t.contact_id, t.contact_resolution_state, t.queue_id, t.postponed_until,
     t.current_user_id, coalesce(nullif(cu.name, ''), cu.username::text, '') AS current_user_name,
@@ -71,6 +71,7 @@ LEFT JOIN LATERAL (
     LEFT JOIN email.recipient r
         ON r.domain_id = m.domain_id AND r.message_id = m.id AND r.type = 'from' AND r.ordinal = 0
     WHERE m.domain_id = t.domain_id AND m.thread_id = t.id AND m.state = 'ready'
+        AND ` + messageReadable + `
     ORDER BY m.received_at DESC, m.id DESC
     LIMIT 1
 ) pv ON true
@@ -196,6 +197,7 @@ type emailThreadViewRecord struct {
 	ID                     int64      `db:"id"`
 	ProfileID              int64      `db:"profile_id"`
 	ProfileName            string     `db:"profile_name"`
+	ProfileSignature       string     `db:"profile_signature"`
 	Subject                string     `db:"subject"`
 	Status                 string     `db:"status"`
 	StatusChangedAt        *time.Time `db:"status_changed_at"`
@@ -228,6 +230,7 @@ func (r *emailThreadViewRecord) toModel() *model.EmailThreadView {
 	view := &model.EmailThreadView{
 		ID:                     r.ID,
 		Profile:                model.Lookup{ID: r.ProfileID, Name: r.ProfileName},
+		ProfileSignature:       r.ProfileSignature,
 		Subject:                r.Subject,
 		Status:                 model.EmailThreadStatus(r.Status),
 		StatusChangedAt:        r.StatusChangedAt,

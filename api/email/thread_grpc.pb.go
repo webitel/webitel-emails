@@ -27,6 +27,10 @@ const (
 	EmailThreads_LocateEmailThreadMessage_FullMethodName = "/webitel.email.EmailThreads/LocateEmailThreadMessage"
 	EmailThreads_GetEmailAttachmentLink_FullMethodName   = "/webitel.email.EmailThreads/GetEmailAttachmentLink"
 	EmailThreads_ListEmailThreadActions_FullMethodName   = "/webitel.email.EmailThreads/ListEmailThreadActions"
+	EmailThreads_SendEmailReply_FullMethodName           = "/webitel.email.EmailThreads/SendEmailReply"
+	EmailThreads_CreateEmailThread_FullMethodName        = "/webitel.email.EmailThreads/CreateEmailThread"
+	EmailThreads_ListEmailSenderProfiles_FullMethodName  = "/webitel.email.EmailThreads/ListEmailSenderProfiles"
+	EmailThreads_UploadEmailAttachment_FullMethodName    = "/webitel.email.EmailThreads/UploadEmailAttachment"
 )
 
 // EmailThreadsClient is the client API for EmailThreads service.
@@ -42,8 +46,8 @@ type EmailThreadsClient interface {
 	// UnbindEmailThreadContact removes the contact of a conversation and keeps it
 	// that way: automatic resolution never writes over an unlinked conversation.
 	UnbindEmailThreadContact(ctx context.Context, in *UnbindEmailThreadContactRequest, opts ...grpc.CallOption) (*UnbindEmailThreadContactResponse, error)
-	// ListEmailThreads returns the conversations the caller handles now or took
-	// into work earlier. Nothing else in the domain is listed.
+	// ListEmailThreads returns the conversations the caller handles now, took into
+	// work earlier or started with an outbound email. Nothing else is listed.
 	ListEmailThreads(ctx context.Context, in *ListEmailThreadsRequest, opts ...grpc.CallOption) (*EmailThreadList, error)
 	// LocateEmailThread returns one conversation visible to the caller, without
 	// its messages. Any other conversation is reported as not found.
@@ -60,6 +64,25 @@ type EmailThreadsClient interface {
 	// ListEmailThreadActions returns the recorded transitions of a visible
 	// conversation, oldest first.
 	ListEmailThreadActions(ctx context.Context, in *ListEmailThreadActionsRequest, opts ...grpc.CallOption) (*EmailThreadActionList, error)
+	// SendEmailReply adds an outbound email to a conversation and queues it for
+	// SMTP; it never changes the attempt. Allowed to the current agent after Take
+	// or, with attempt_id 0, to a participant of a processed conversation without
+	// an agent. Errors: email.outbound.disabled, email.thread.reply_not_allowed,
+	// email.thread.attempt_version_conflict, email.thread.reply_parent_not_found,
+	// email.profile.send_unavailable, email.message.request_conflict.
+	SendEmailReply(ctx context.Context, in *SendEmailReplyRequest, opts ...grpc.CallOption) (*EmailMessage, error)
+	// CreateEmailThread starts a processed conversation with an outbound email
+	// and queues it for SMTP. Errors: email.outbound.disabled,
+	// email.profile.send_unavailable, email.message.invalid_contact_mode,
+	// email.message.request_conflict.
+	CreateEmailThread(ctx context.Context, in *CreateEmailThreadRequest, opts ...grpc.CallOption) (*CreateEmailThreadResponse, error)
+	// ListEmailSenderProfiles returns the profiles a new email may be sent from.
+	ListEmailSenderProfiles(ctx context.Context, in *ListEmailSenderProfilesRequest, opts ...grpc.CallOption) (*EmailSenderProfileList, error)
+	// UploadEmailAttachment stores a file for an outbound email and returns its
+	// one-time reference. Requires read and either create or update. Errors:
+	// email.outbound.disabled, email.attachment.invalid, email.attachment.too_large,
+	// email.attachment.rejected, email.attachment.upload_busy, email.storage.unavailable.
+	UploadEmailAttachment(ctx context.Context, in *UploadEmailAttachmentRequest, opts ...grpc.CallOption) (*EmailAttachmentUpload, error)
 }
 
 type emailThreadsClient struct {
@@ -150,6 +173,46 @@ func (c *emailThreadsClient) ListEmailThreadActions(ctx context.Context, in *Lis
 	return out, nil
 }
 
+func (c *emailThreadsClient) SendEmailReply(ctx context.Context, in *SendEmailReplyRequest, opts ...grpc.CallOption) (*EmailMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailMessage)
+	err := c.cc.Invoke(ctx, EmailThreads_SendEmailReply_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) CreateEmailThread(ctx context.Context, in *CreateEmailThreadRequest, opts ...grpc.CallOption) (*CreateEmailThreadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateEmailThreadResponse)
+	err := c.cc.Invoke(ctx, EmailThreads_CreateEmailThread_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) ListEmailSenderProfiles(ctx context.Context, in *ListEmailSenderProfilesRequest, opts ...grpc.CallOption) (*EmailSenderProfileList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailSenderProfileList)
+	err := c.cc.Invoke(ctx, EmailThreads_ListEmailSenderProfiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) UploadEmailAttachment(ctx context.Context, in *UploadEmailAttachmentRequest, opts ...grpc.CallOption) (*EmailAttachmentUpload, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailAttachmentUpload)
+	err := c.cc.Invoke(ctx, EmailThreads_UploadEmailAttachment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmailThreadsServer is the server API for EmailThreads service.
 // All implementations must embed UnimplementedEmailThreadsServer
 // for forward compatibility.
@@ -163,8 +226,8 @@ type EmailThreadsServer interface {
 	// UnbindEmailThreadContact removes the contact of a conversation and keeps it
 	// that way: automatic resolution never writes over an unlinked conversation.
 	UnbindEmailThreadContact(context.Context, *UnbindEmailThreadContactRequest) (*UnbindEmailThreadContactResponse, error)
-	// ListEmailThreads returns the conversations the caller handles now or took
-	// into work earlier. Nothing else in the domain is listed.
+	// ListEmailThreads returns the conversations the caller handles now, took into
+	// work earlier or started with an outbound email. Nothing else is listed.
 	ListEmailThreads(context.Context, *ListEmailThreadsRequest) (*EmailThreadList, error)
 	// LocateEmailThread returns one conversation visible to the caller, without
 	// its messages. Any other conversation is reported as not found.
@@ -181,6 +244,25 @@ type EmailThreadsServer interface {
 	// ListEmailThreadActions returns the recorded transitions of a visible
 	// conversation, oldest first.
 	ListEmailThreadActions(context.Context, *ListEmailThreadActionsRequest) (*EmailThreadActionList, error)
+	// SendEmailReply adds an outbound email to a conversation and queues it for
+	// SMTP; it never changes the attempt. Allowed to the current agent after Take
+	// or, with attempt_id 0, to a participant of a processed conversation without
+	// an agent. Errors: email.outbound.disabled, email.thread.reply_not_allowed,
+	// email.thread.attempt_version_conflict, email.thread.reply_parent_not_found,
+	// email.profile.send_unavailable, email.message.request_conflict.
+	SendEmailReply(context.Context, *SendEmailReplyRequest) (*EmailMessage, error)
+	// CreateEmailThread starts a processed conversation with an outbound email
+	// and queues it for SMTP. Errors: email.outbound.disabled,
+	// email.profile.send_unavailable, email.message.invalid_contact_mode,
+	// email.message.request_conflict.
+	CreateEmailThread(context.Context, *CreateEmailThreadRequest) (*CreateEmailThreadResponse, error)
+	// ListEmailSenderProfiles returns the profiles a new email may be sent from.
+	ListEmailSenderProfiles(context.Context, *ListEmailSenderProfilesRequest) (*EmailSenderProfileList, error)
+	// UploadEmailAttachment stores a file for an outbound email and returns its
+	// one-time reference. Requires read and either create or update. Errors:
+	// email.outbound.disabled, email.attachment.invalid, email.attachment.too_large,
+	// email.attachment.rejected, email.attachment.upload_busy, email.storage.unavailable.
+	UploadEmailAttachment(context.Context, *UploadEmailAttachmentRequest) (*EmailAttachmentUpload, error)
 	mustEmbedUnimplementedEmailThreadsServer()
 }
 
@@ -214,6 +296,18 @@ func (UnimplementedEmailThreadsServer) GetEmailAttachmentLink(context.Context, *
 }
 func (UnimplementedEmailThreadsServer) ListEmailThreadActions(context.Context, *ListEmailThreadActionsRequest) (*EmailThreadActionList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListEmailThreadActions not implemented")
+}
+func (UnimplementedEmailThreadsServer) SendEmailReply(context.Context, *SendEmailReplyRequest) (*EmailMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendEmailReply not implemented")
+}
+func (UnimplementedEmailThreadsServer) CreateEmailThread(context.Context, *CreateEmailThreadRequest) (*CreateEmailThreadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateEmailThread not implemented")
+}
+func (UnimplementedEmailThreadsServer) ListEmailSenderProfiles(context.Context, *ListEmailSenderProfilesRequest) (*EmailSenderProfileList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEmailSenderProfiles not implemented")
+}
+func (UnimplementedEmailThreadsServer) UploadEmailAttachment(context.Context, *UploadEmailAttachmentRequest) (*EmailAttachmentUpload, error) {
+	return nil, status.Error(codes.Unimplemented, "method UploadEmailAttachment not implemented")
 }
 func (UnimplementedEmailThreadsServer) mustEmbedUnimplementedEmailThreadsServer() {}
 func (UnimplementedEmailThreadsServer) testEmbeddedByValue()                      {}
@@ -380,6 +474,78 @@ func _EmailThreads_ListEmailThreadActions_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmailThreads_SendEmailReply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendEmailReplyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).SendEmailReply(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_SendEmailReply_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).SendEmailReply(ctx, req.(*SendEmailReplyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_CreateEmailThread_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateEmailThreadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).CreateEmailThread(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_CreateEmailThread_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).CreateEmailThread(ctx, req.(*CreateEmailThreadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_ListEmailSenderProfiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEmailSenderProfilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).ListEmailSenderProfiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_ListEmailSenderProfiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).ListEmailSenderProfiles(ctx, req.(*ListEmailSenderProfilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_UploadEmailAttachment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UploadEmailAttachmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).UploadEmailAttachment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_UploadEmailAttachment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).UploadEmailAttachment(ctx, req.(*UploadEmailAttachmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmailThreads_ServiceDesc is the grpc.ServiceDesc for EmailThreads service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -418,6 +584,22 @@ var EmailThreads_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListEmailThreadActions",
 			Handler:    _EmailThreads_ListEmailThreadActions_Handler,
+		},
+		{
+			MethodName: "SendEmailReply",
+			Handler:    _EmailThreads_SendEmailReply_Handler,
+		},
+		{
+			MethodName: "CreateEmailThread",
+			Handler:    _EmailThreads_CreateEmailThread_Handler,
+		},
+		{
+			MethodName: "ListEmailSenderProfiles",
+			Handler:    _EmailThreads_ListEmailSenderProfiles_Handler,
+		},
+		{
+			MethodName: "UploadEmailAttachment",
+			Handler:    _EmailThreads_UploadEmailAttachment_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

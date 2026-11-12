@@ -43,19 +43,19 @@ func (s *emailMessageAttachmentStore) CreateBulk(
 		return nil
 	}
 
-	// unnest keeps the parameter count fixed whatever the number of parts. No
-	// file id is written here: the manifest is created before any upload.
+	// unnest keeps the parameter count fixed whatever the number of parts. An
+	// inbound manifest has no file ids yet; an outbound one is written stored.
 	const query = `
 INSERT INTO email.message_attachment (
     domain_id, message_id, content_id, disposition,
-    file_name, mime_type, size, position, state, skipped_reason
+    file_name, mime_type, size, position, state, skipped_reason, file_id
 )
 SELECT $1, $2, NULLIF(a.content_id, ''), a.disposition,
-       a.file_name, a.mime_type, a.size, a.position, a.state, NULLIF(a.skipped_reason, '')
+       a.file_name, a.mime_type, a.size, a.position, a.state, NULLIF(a.skipped_reason, ''), a.file_id
 FROM unnest(
     $3::text[], $4::text[], $5::text[],
-    $6::text[], $7::bigint[], $8::int[], $9::text[], $10::text[]
-) AS a(content_id, disposition, file_name, mime_type, size, position, state, skipped_reason)`
+    $6::text[], $7::bigint[], $8::int[], $9::text[], $10::text[], $11::bigint[]
+) AS a(content_id, disposition, file_name, mime_type, size, position, state, skipped_reason, file_id)`
 
 	var (
 		contentIDs  = make([]string, 0, len(attachments))
@@ -66,6 +66,7 @@ FROM unnest(
 		positions   = make([]int32, 0, len(attachments))
 		states      = make([]string, 0, len(attachments))
 		reasons     = make([]string, 0, len(attachments))
+		fileIDs     = make([]*int64, 0, len(attachments))
 	)
 	for _, attachment := range attachments {
 		contentIDs = append(contentIDs, attachment.ContentID)
@@ -76,6 +77,7 @@ FROM unnest(
 		positions = append(positions, attachment.Position)
 		states = append(states, string(attachment.State))
 		reasons = append(reasons, string(attachment.SkippedReason))
+		fileIDs = append(fileIDs, attachment.FileID)
 	}
 
 	_, err := s.db.Exec(
@@ -91,6 +93,7 @@ FROM unnest(
 		positions,
 		states,
 		reasons,
+		fileIDs,
 	)
 
 	return ParseError(err)

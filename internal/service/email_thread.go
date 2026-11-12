@@ -62,10 +62,7 @@ func (s *EmailThreadService) BindContact(ctx context.Context, domainID, userID, 
 		return err
 	}
 	if !own {
-		return kiterrors.NotFound(
-			"contact not found",
-			kiterrors.WithID("email.thread.contact_not_found"),
-		)
+		return errContactNotFound()
 	}
 
 	return s.setContact(ctx, domainID, userID, threadID, &contactID)
@@ -121,6 +118,13 @@ func (s *EmailThreadService) requireAssigned(ctx context.Context, domainID, user
 	}
 
 	return nil
+}
+
+func errContactNotFound() error {
+	return kiterrors.NotFound(
+		"contact not found",
+		kiterrors.WithID("email.thread.contact_not_found"),
+	)
 }
 
 func errThreadNotAssigned() error {
