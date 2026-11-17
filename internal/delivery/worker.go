@@ -1,4 +1,5 @@
-// Package delivery sends accepted outbound emails over SMTP, one attempt each.
+// Package delivery sends accepted outbound emails over SMTP and retries a failed
+// attempt while it certainly did not reach the server.
 package delivery
 
 import (
@@ -12,6 +13,7 @@ import (
 
 	kiterrors "github.com/webitel/webitel-go-kit/pkg/errors"
 	"go.uber.org/fx"
+	"google.golang.org/grpc/codes"
 
 	"github.com/webitel/webitel-emails/config"
 	mailinfra "github.com/webitel/webitel-emails/infra/mail"
@@ -209,8 +211,8 @@ func (w *Worker) Deliver(ctx context.Context, d store.EmailDelivery) {
 	defer cancel()
 	log := w.log.With("domain_id", d.DomainID, "profile_id", d.ProfileID, "message_id", d.MessageID, "attempt", d.Token)
 
-	status, code, err := w.attempt(ctx, d)
-	if errors.Is(err, errLeaseLost) || status == "" {
+	outcome, err := w.attempt(ctx, d)
+	if errors.Is(err, errLeaseLost) || outcome.Status == "" {
 		// The commit did not apply or its result is unknown: recovery decides by
 		// the stored phase.
 		log.Warn("outbound email left to recovery", "err", err)
@@ -219,54 +221,61 @@ func (w *Worker) Deliver(ctx context.Context, d store.EmailDelivery) {
 
 	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancelFinish()
-	applied, finishErr := w.deliveries.Finish(finishCtx, d, status, code)
+	applied, requeued, finishErr := w.deliveries.Finish(finishCtx, d, outcome)
+	fields := []any{"status", outcome.Status, "code", outcome.Code}
 	switch {
 	case finishErr != nil:
-		log.Error("store outbound email result", "status", status, "code", code, "err", finishErr)
+		log.Error("store outbound email result", append(fields, "err", finishErr)...)
 	case !applied:
-		log.Warn("outbound email result was already stored", "status", status, "code", code)
-	case status == model.EmailDeliveryStatusSent:
+		log.Warn("outbound email result was already stored", fields...)
+	case outcome.Status == model.EmailDeliveryStatusSent:
 		log.Info("outbound email sent")
+	case requeued:
+		log.Warn("outbound email retry scheduled", append([]any{"code", outcome.Code, "err", err}, smtpFields(err)...)...)
 	default:
-		log.Warn("outbound email failed", append([]any{"code", code, "err", err}, smtpFields(err)...)...)
+		log.Warn("outbound email failed", append([]any{"code", outcome.Code, "retryable", outcome.Retryable, "err", err},
+			smtpFields(err)...)...)
 	}
 }
 
-// attempt returns the result to store; an empty status means none may be stored.
-func (w *Worker) attempt(
-	ctx context.Context,
-	d store.EmailDelivery,
-) (model.EmailDeliveryStatus, model.EmailDeliveryError, error) {
-	failed := func(code model.EmailDeliveryError, err error) (model.EmailDeliveryStatus, model.EmailDeliveryError, error) {
-		return model.EmailDeliveryStatusFailed, code, err
+// attempt returns the outcome to store; an empty status means none may be stored.
+func (w *Worker) attempt(ctx context.Context, d store.EmailDelivery) (store.EmailDeliveryOutcome, error) {
+	failed := func(code model.EmailDeliveryError, retryable bool, err error) (store.EmailDeliveryOutcome, error) {
+		return store.EmailDeliveryOutcome{Status: model.EmailDeliveryStatusFailed, Code: code, Retryable: retryable}, err
 	}
+	// gaveUp: the send timed out or the worker stops, which never is the email's fault.
+	gaveUp := func() bool { return ctx.Err() != nil }
 
 	email, files, err := w.load(ctx, d)
 	defer closeAll(files)
 	if err != nil {
-		return failed(model.EmailDeliveryErrorInterrupted, err)
+		return failed(model.EmailDeliveryErrorInterrupted, gaveUp() || transient(err), err)
 	}
 	// Built before connecting: attachments come from storage, and a too large email
 	// never reaches the server.
 	raw, err := outbound.BuildMIME(email, w.cfg.MaxMessageSize)
 	switch {
 	case errors.Is(err, outbound.ErrMessageTooLarge):
-		return failed(model.EmailDeliveryErrorMessageTooLarge, err)
+		return failed(model.EmailDeliveryErrorMessageTooLarge, false, err)
 	case err != nil:
-		return failed(model.EmailDeliveryErrorInterrupted, err)
+		// A file storage no longer has is not retried; a cut stream is.
+		return failed(model.EmailDeliveryErrorInterrupted, gaveUp() || transient(err), err)
 	}
 	closeAll(files)
 
 	profile, err := w.profiles.Locate(ctx, d.DomainID, d.ProfileID)
-	if err != nil {
-		return failed(model.EmailDeliveryErrorInterrupted, err)
-	}
-	if profile.SMTPHost == "" || profile.SMTPPort <= 0 {
-		return failed(model.EmailDeliveryErrorProfileUnavailable, nil)
+	switch {
+	case kiterrors.Code(err) == codes.NotFound:
+		return failed(model.EmailDeliveryErrorProfileUnavailable, false, err)
+	case err != nil:
+		return failed(model.EmailDeliveryErrorInterrupted, gaveUp() || transient(err), err)
+	case profile.SMTPHost == "" || profile.SMTPPort <= 0:
+		return failed(model.EmailDeliveryErrorProfileUnavailable, false, nil)
 	}
 	connection, err := w.profiles.SMTPConnection(ctx, profile)
 	if err != nil {
-		return failed(classifyCredentials(err, ctx.Err() != nil), credentialsError(err))
+		code, retryable := classifyCredentials(err, gaveUp())
+		return failed(code, retryable, credentialsError(err))
 	}
 
 	from, recipients := outbound.Envelope(email)
@@ -281,11 +290,12 @@ func (w *Worker) attempt(
 	var failure *mailinfra.SMTPSendError
 	switch {
 	case err == nil:
-		return model.EmailDeliveryStatusSent, "", nil
+		return store.EmailDeliveryOutcome{Status: model.EmailDeliveryStatusSent}, nil
 	case errors.As(err, &failure) && failure.Stage == mailinfra.SMTPStageCommit:
-		return "", "", err
+		return store.EmailDeliveryOutcome{}, err
 	default:
-		return failed(classify(err, ctx.Err() != nil), err)
+		code, retryable := classify(err, gaveUp())
+		return failed(code, retryable, err)
 	}
 }
 

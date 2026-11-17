@@ -33,6 +33,8 @@ type smtpProfiles struct {
 	server *mailtest.Server
 	// fail is returned instead of credentials.
 	fail error
+	// refused points the profile at a port nobody listens on.
+	refused bool
 }
 
 func (p smtpProfiles) Locate(ctx context.Context, domainID, id int64) (*model.EmailProfile, error) {
@@ -43,7 +45,11 @@ func (p smtpProfiles) SMTPConnection(context.Context, *model.EmailProfile) (mail
 	if p.fail != nil {
 		return mailinfra.SMTPConnection{}, p.fail
 	}
-	return mailinfra.SMTPConnection{Host: p.server.Host, Port: p.server.Port,
+	port := p.server.Port
+	if p.refused {
+		port = closedPort()
+	}
+	return mailinfra.SMTPConnection{Host: p.server.Host, Port: port,
 		Security: model.EmailConnectionSecurityTLS, Username: "agent", Password: "p"}, nil
 }
 
@@ -66,6 +72,10 @@ func (f *storedFiles) Open(_ context.Context, _, _, size int64) (io.ReadCloser, 
 
 type errReader struct{ err error }
 
+func failed(code model.EmailDeliveryError, retryable bool) store.EmailDeliveryOutcome {
+	return store.EmailDeliveryOutcome{Status: model.EmailDeliveryStatusFailed, Code: code, Retryable: retryable}
+}
+
 func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 type deliveryEnv struct {
@@ -78,13 +88,15 @@ type deliveryEnv struct {
 	// log is shared by every worker: one handler serializes writes to logs.
 	log     *slog.Logger
 	credErr error
+	// untrusted drops the CA of the fake server; refused points at a closed port.
+	untrusted, refused bool
 }
 
 func newDeliveryEnv(t *testing.T, smtp mailtest.Config) *deliveryEnv {
 	env := &deliveryEnv{sendEnv: newSendEnv(t), server: mailtest.Start(t, smtp), files: &storedFiles{}, logs: &bytes.Buffer{}}
 	env.log = slog.New(slog.NewTextHandler(env.logs, nil))
 	env.allowSend(env.profile)
-	env.deliveries = storepostgres.NewEmailDeliveryStore(env.db, true)
+	env.deliveries = storepostgres.NewEmailDeliveryStore(env.db, true, nil)
 	env.cfg = &config.Config{Outbound: config.OutboundConfig{
 		MaxMessageSize: 1 << 20, DeliveryTickInterval: 20 * time.Millisecond,
 		MaxConcurrentDeliveries: 8, MaxDeliveriesPerProfile: 2,
@@ -97,13 +109,18 @@ func newDeliveryEnv(t *testing.T, smtp mailtest.Config) *deliveryEnv {
 
 func (e *deliveryEnv) worker() *delivery.Worker {
 	o := e.cfg.Outbound
+	roots := e.server.RootCAs
+	if e.untrusted {
+		roots = nil
+	}
 	return delivery.New(delivery.Params{
 		Config: e.cfg, Deliveries: e.deliveries, UoW: storepostgres.NewUnitOfWork(e.db),
-		Profiles: smtpProfiles{profiles: storepostgres.NewEmailProfileStore(e.db), server: e.server, fail: e.credErr},
-		Files:    e.files,
+		Profiles: smtpProfiles{profiles: storepostgres.NewEmailProfileStore(e.db), server: e.server, fail: e.credErr,
+			refused: e.refused},
+		Files: e.files,
 		SMTP: mailinfra.NewSMTPSender(mailinfra.SMTPSenderConfig{
 			CommandTimeout: o.SMTPCommandTimeout, DataTimeout: o.SMTPDataTimeout,
-			FinalReplyTimeout: o.SMTPFinalReplyTimeout, SendTimeout: o.DeliverySendTimeout, RootCAs: e.server.RootCAs,
+			FinalReplyTimeout: o.SMTPFinalReplyTimeout, SendTimeout: o.DeliverySendTimeout, RootCAs: roots,
 		}),
 		Log: e.log,
 	})
@@ -169,8 +186,8 @@ func TestDeliverySends(t *testing.T) {
 	}
 
 	// A late write of the same attempt changes nothing and tells nobody.
-	if applied, err := env.deliveries.Finish(ctx, store.EmailDelivery{DomainID: 1, MessageID: message.ID,
-		ThreadID: message.ThreadID, Token: 1}, model.EmailDeliveryStatusFailed, model.EmailDeliveryErrorRejected); err != nil || applied {
+	if applied, _, err := env.deliveries.Finish(ctx, store.EmailDelivery{DomainID: 1, MessageID: message.ID,
+		ThreadID: message.ThreadID, Token: 1}, failed(model.EmailDeliveryErrorRejected, false)); err != nil || applied {
 		t.Fatalf("late finish = %v, %v", applied, err)
 	}
 }
@@ -185,6 +202,7 @@ func TestDeliveryFailures(t *testing.T) {
 		{"one recipient refused", mailtest.Config{Replies: map[string]string{"RCPT hidden@x.com": "550 5.1.1 <hidden@x.com> unknown"}},
 			"failed  recipient_rejected", 0},
 		{"recipient 552", mailtest.Config{Replies: map[string]string{"RCPT": "552 5.2.2 full"}}, "failed  recipient_rejected", 0},
+		{"too many recipients", mailtest.Config{Replies: map[string]string{"RCPT": "552 5.5.3 full"}}, "failed  temporary_failure", 0},
 		{"larger than SIZE", mailtest.Config{Size: 100}, "failed  message_too_large", 0},
 		{"mail 552", mailtest.Config{Replies: map[string]string{"MAIL": "552 storage"}}, "failed  rejected", 0},
 		{"mail 5.3.4", mailtest.Config{Replies: map[string]string{"MAIL": "552 5.3.4 too big"}}, "failed  message_too_large", 0},
@@ -194,7 +212,8 @@ func TestDeliveryFailures(t *testing.T) {
 		{"dropped before the boundary", mailtest.Config{Replies: map[string]string{"DATA": mailtest.FinalDrop}}, "failed  interrupted", 0},
 		{"dropped after the dot", mailtest.Config{Replies: map[string]string{"FINAL": mailtest.FinalDrop}}, "failed  unknown_result", 1},
 		{"no reply after the dot", mailtest.Config{Replies: map[string]string{"FINAL": mailtest.FinalHang}}, "failed  unknown_result", 1},
-		{"greeting refused", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy"}}, "failed  connection", 0},
+		{"EHLO refused", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy"}}, "failed  temporary_failure", 0},
+		{"greeting refused", mailtest.Config{Replies: map[string]string{"GREETING": "421 4.3.2 later"}}, "failed  temporary_failure", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -246,7 +265,7 @@ func TestDeliveryLeaseAndRecovery(t *testing.T) {
 		message := env.queue()
 		env.claim(time.Millisecond)
 		time.Sleep(10 * time.Millisecond)
-		if n, err := env.deliveries.RecoverExpired(ctx, 100); err != nil || n != 1 || env.result(message.ID) != "failed  interrupted" {
+		if n, _, err := env.recoverExpired(); err != nil || n != 1 || env.result(message.ID) != "failed  interrupted" {
 			t.Fatalf("recovered %d, %v, %s", n, err, env.result(message.ID))
 		}
 		if got := workspaceEvents(t, env.db, message.ThreadID); got[len(got)-1] != "message.delivery 70 history " {
@@ -280,7 +299,7 @@ func TestDeliveryLeaseAndRecovery(t *testing.T) {
 		if len(env.server.Accepted()) != 0 || discarded != 1 || env.result(message.ID) != "pending sending" {
 			t.Fatalf("accepted %d, discarded %d, %s", len(env.server.Accepted()), discarded, env.result(message.ID))
 		}
-		if _, err := env.deliveries.RecoverExpired(ctx, 100); err != nil || env.result(message.ID) != "failed  interrupted" {
+		if _, _, err := env.recoverExpired(); err != nil || env.result(message.ID) != "failed  interrupted" {
 			t.Fatalf("recovery: %v, %s", err, env.result(message.ID))
 		}
 	})
@@ -295,10 +314,10 @@ func TestDeliveryLeaseAndRecovery(t *testing.T) {
 			t.Fatalf("commit = %v, %v", ok, err)
 		}
 		time.Sleep(600 * time.Millisecond)
-		if _, err := env.deliveries.RecoverExpired(ctx, 100); err != nil || env.result(message.ID) != "failed  unknown_result" {
+		if _, _, err := env.recoverExpired(); err != nil || env.result(message.ID) != "failed  unknown_result" {
 			t.Fatalf("recovery: %v, %s", err, env.result(message.ID))
 		}
-		if applied, err := env.deliveries.Finish(ctx, d, model.EmailDeliveryStatusSent, ""); err != nil || applied {
+		if applied, _, err := env.deliveries.Finish(ctx, d, store.EmailDeliveryOutcome{Status: model.EmailDeliveryStatusSent}); err != nil || applied {
 			t.Fatalf("late finish = %v, %v", applied, err)
 		}
 	})

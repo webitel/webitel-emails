@@ -191,16 +191,38 @@ background. While `outbound.enabled` is off, which is the default, these methods
 - **Limits** (`outbound.*`): recipients, size of each body, number and total
   size of attachments, size of the encoded email; above them the request is
   refused as a whole.
-- **Delivery.** A worker on every instance claims queued emails within its own
-  and per-profile limits and makes one SMTP attempt each: `sent` once the server
-  accepted the email (not that it reached the mailbox), or `failed` with a code
-  (`auth`, `recipient_rejected`, `message_too_large`, `connection`,
-  `profile_unavailable`, `rejected`, `temporary_failure`, `interrupted`,
-  `unknown_result`). `unknown_result` means the server may have the email, so
-  it is never repeated automatically; retries come with stage 16. An attempt
-  whose instance stopped is failed by the leader after its lease
-  (`outbound.delivery_lease`). The email is not copied to the Sent folder of the
-  mailbox. Logs carry codes only: no addresses, credentials or SMTP replies.
+- **Delivery.** A worker on every instance claims due emails within its own
+  and per-profile limits: `sent` once the server accepted the email (not that it
+  reached the mailbox), or `failed` with a code (`auth`, `recipient_rejected`,
+  `message_too_large`, `connection`, `profile_unavailable`, `rejected`,
+  `temporary_failure`, `interrupted`, `unknown_result`). The email is not copied
+  to the Sent folder of the mailbox. Logs carry codes only: no addresses,
+  credentials or SMTP replies.
+- **Automatic retries.** An attempt the server certainly did not accept and
+  whose cause may pass (a `4xx` reply, a broken or timed out connection, an
+  unavailable dependency, a stop of the worker before the commit) is queued
+  again after `outbound.delivery_retry_delays` (`1m,5m,15m`: up to 4 attempts in
+  a series); when they run out, the email is `failed` with the last code. A
+  certificate, an unknown host, other `5xx` replies and `unknown_result` are
+  final at once: `unknown_result` means the server may have the email, so it is
+  never sent again. An attempt whose instance stopped is recovered by the leader
+  after its lease (`outbound.delivery_lease`): before the commit it counts as
+  `interrupted`, after it as `unknown_result`. An empty list in the YAML file
+  turns automatic retries off (an empty environment variable keeps the default).
+- **Retry and Cancel.** `RetryEmailDelivery` queues a `failed` email again as
+  the same email, with the same Message-ID, and starts a new series; it is open
+  to its author with the right to reply (as for `SendEmailReply`), for the codes
+  `temporary_failure`, `connection`, `interrupted`, `auth`,
+  `profile_unavailable` and `rejected`, within 24 hours of acceptance and
+  `outbound.delivery_manual_retries` series (1 by default, 0–3), and only with
+  `outbound.enabled`. `CancelEmailDelivery` stops an email of its author that is
+  queued, waits for a retry or is being sent, until the server may have it;
+  `cancelled` is final, and it works with sending disabled and while another
+  agent handles the Thread. Both need `email_thread` read and update and the
+  `delivery_version` the client read: an older one changes nothing and fails
+  with `Aborted`. The read API gives `delivery_version`, `delivery_retry_at`
+  (while a scheduled retry waits; once past, the attempt may already run) and
+  `manual_retry_available`; the reason of a failure comes only with `failed`.
 - **Idempotency.** `request_id` identifies the intent of its author: the same
   request returns the stored email with its current status, another one with
   the same id fails with `email.message.request_conflict`.
@@ -222,7 +244,14 @@ background. While `outbound.enabled` is off, which is the default, these methods
   `email.storage.unavailable`, `email.attachment.reference_invalid`,
   `email.attachment.reference_unavailable`; also the existing
   `email.thread.not_found`, `store.email_profile.not_found` and
-  `contacts.client.unavailable`.
+  `contacts.client.unavailable`. `RetryEmailDelivery` and `CancelEmailDelivery`
+  (stage 16) add
+  `email.message.delivery_version_invalid`, `email.message.delivery_version_conflict`,
+  `email.message.retry_not_allowed`, `email.message.retry_expired`,
+  `email.message.retry_limit_reached`, `email.message.delivery_committed`,
+  `email.message.cancel_not_allowed` and `email.message.not_author`, and reuse
+  `email.outbound.disabled`, `email.thread.reply_not_allowed` and
+  `email.thread.attempt_version_conflict`.
 
 For Admin: `allow_send` and `Reply-To` are profile settings with the effect
 above; turning `allow_send` off stops new emails, not replies.

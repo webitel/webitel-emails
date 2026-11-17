@@ -75,6 +75,17 @@ type EmailMessageView struct {
 	DeliveryStatus    EmailDeliveryStatus
 	DeliveryErrorCode EmailDeliveryError
 	DeliveredAt       *time.Time
+	// DeliveryVersion grows with every visible change of the delivery.
+	DeliveryVersion int64
+	// DeliveryRetryAt is when a scheduled automatic retry becomes due.
+	DeliveryRetryAt *time.Time
+	// DeliveryManualRetries counts the series its author started by hand.
+	DeliveryManualRetries int
+	// ReplyAllowed: the reader may reply in the Thread now, by the applied projection.
+	ReplyAllowed bool
+	// ManualRetryAvailable: the reader may retry the delivery now; the command
+	// checks it again.
+	ManualRetryAvailable bool
 
 	// RawHTML is the stored body exactly as the sender wrote it. It never
 	// leaves the service; only SanitizedHTML is returned to a client.

@@ -68,7 +68,7 @@ var Module = fx.Module(
 		),
 		fx.Annotate(
 			func(pool *pgxpool.Pool, cfg *config.Config) *emailDeliveryStore {
-				return NewEmailDeliveryStore(pool, cfg.WorkspaceEvents.Enabled)
+				return NewEmailDeliveryStore(pool, cfg.WorkspaceEvents.Enabled, cfg.Outbound.DeliveryRetryDelays)
 			},
 			fx.As(new(store.EmailDeliveryStore)),
 		),

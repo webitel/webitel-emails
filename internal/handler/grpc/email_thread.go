@@ -7,6 +7,7 @@ import (
 
 	emailpb "github.com/webitel/webitel-emails/api/email"
 	"github.com/webitel/webitel-emails/internal/auth"
+	"github.com/webitel/webitel-emails/internal/model"
 	"github.com/webitel/webitel-emails/internal/service"
 )
 
@@ -15,10 +16,11 @@ import (
 type EmailThreadsServer struct {
 	emailpb.UnimplementedEmailThreadsServer
 
-	service *service.EmailThreadService
-	reads   *service.EmailThreadReadService
-	uploads *service.EmailAttachmentUploadService
-	sends   *service.EmailSendService
+	service    *service.EmailThreadService
+	reads      *service.EmailThreadReadService
+	uploads    *service.EmailAttachmentUploadService
+	sends      *service.EmailSendService
+	deliveries *service.EmailDeliveryService
 }
 
 var _ emailpb.EmailThreadsServer = (*EmailThreadsServer)(nil)
@@ -29,8 +31,60 @@ func NewEmailThreadsServer(
 	readService *service.EmailThreadReadService,
 	uploadService *service.EmailAttachmentUploadService,
 	sendService *service.EmailSendService,
+	deliveryService *service.EmailDeliveryService,
 ) *EmailThreadsServer {
-	return &EmailThreadsServer{service: threadService, reads: readService, uploads: uploadService, sends: sendService}
+	return &EmailThreadsServer{
+		service: threadService, reads: readService, uploads: uploadService, sends: sendService,
+		deliveries: deliveryService,
+	}
+}
+
+// RetryEmailDelivery queues a failed outbound email of the caller again.
+func (s *EmailThreadsServer) RetryEmailDelivery(
+	ctx context.Context,
+	req *emailpb.RetryEmailDeliveryRequest,
+) (*emailpb.EmailDeliveryReceipt, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	receipt, err := s.deliveries.Retry(ctx, session, service.DeliveryCommandInput{
+		ThreadID: req.GetThreadId(), MessageID: req.GetMessageId(), ExpectedDeliveryVersion: req.ExpectedDeliveryVersion,
+		AttemptID: req.GetAttemptId(), ExpectedAttemptVersion: req.GetExpectedAttemptVersion(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return deliveryReceiptToProto(receipt), nil
+}
+
+// CancelEmailDelivery stops an outbound email of the caller before the server may
+// have it.
+func (s *EmailThreadsServer) CancelEmailDelivery(
+	ctx context.Context,
+	req *emailpb.CancelEmailDeliveryRequest,
+) (*emailpb.EmailDeliveryReceipt, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	receipt, err := s.deliveries.Cancel(ctx, session, service.DeliveryCommandInput{
+		ThreadID: req.GetThreadId(), MessageID: req.GetMessageId(), ExpectedDeliveryVersion: req.ExpectedDeliveryVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return deliveryReceiptToProto(receipt), nil
+}
+
+func deliveryReceiptToProto(r *service.DeliveryReceipt) *emailpb.EmailDeliveryReceipt {
+	return &emailpb.EmailDeliveryReceipt{
+		MessageId: r.MessageID, DeliveryStatus: deliveryStatusToProto[r.Status], DeliveryVersion: r.Version,
+	}
 }
 
 // CreateEmailThread starts a Thread with an outbound email of the caller.
@@ -211,6 +265,7 @@ func (s *EmailThreadsServer) ListEmailThreadMessages(
 		return nil, err
 	}
 
+	s.markManualRetry(session, messages...)
 	items := make([]*emailpb.EmailMessage, 0, len(messages))
 	for _, message := range messages {
 		items = append(items, emailMessageToProto(message))
@@ -282,8 +337,16 @@ func (s *EmailThreadsServer) LocateEmailThreadMessage(
 	if err != nil {
 		return nil, err
 	}
+	s.markManualRetry(session, message)
 
 	return emailMessageToProto(message), nil
+}
+
+// markManualRetry fills manual_retry_available of emails the caller reads.
+func (s *EmailThreadsServer) markManualRetry(session *auth.Session, messages ...*model.EmailMessageView) {
+	if s.deliveries != nil {
+		s.deliveries.MarkManualRetry(session, messages...)
+	}
 }
 
 // BindEmailThreadContact links a Thread to an existing Contact of the caller's domain.

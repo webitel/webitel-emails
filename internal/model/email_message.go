@@ -34,6 +34,9 @@ const (
 	EmailDeliveryStatusPending EmailDeliveryStatus = "pending"
 	EmailDeliveryStatusSent    EmailDeliveryStatus = "sent"
 	EmailDeliveryStatusFailed  EmailDeliveryStatus = "failed"
+	// EmailDeliveryStatusCancelled: its author stopped it before the server could
+	// accept it; final.
+	EmailDeliveryStatusCancelled EmailDeliveryStatus = "cancelled"
 )
 
 // EmailDeliveryError is why an outbound message failed.

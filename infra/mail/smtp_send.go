@@ -103,13 +103,17 @@ func (s *SMTPSender) Send(
 	defer stop()
 
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: connection.Host, RootCAs: s.cfg.RootCAs}
-	client, err := startSMTP(ctx, conn, connection, tlsConfig, true)
+	client, hidden, err := startSMTP(ctx, conn, connection, tlsConfig, true)
 	if err != nil {
-		return &SMTPSendError{Stage: SMTPStageConnect, Unsupported: errors.Is(err, ErrSMTPStartTLSNotSupported), err: err}
+		return connectError(err)
 	}
 
 	auth, err := smtpAuth(client, connection)
 	if err != nil {
+		// No AUTH after a temporary refusal of EHLO: the refusal is the cause.
+		if hidden != nil && errors.Is(err, ErrSMTPAuthNotSupported) {
+			return replyError(SMTPStageConnect, hidden)
+		}
 		return &SMTPSendError{Stage: SMTPStageAuth, Unsupported: true, err: err}
 	}
 	if err := client.Auth(auth); err != nil {
@@ -176,6 +180,17 @@ func dataSize(raw []byte) int64 {
 	}
 
 	return int64(len(raw)) + 2
+}
+
+// connectError keeps the codes of a refused greeting, EHLO or STARTTLS like any
+// other reply; anything else stays a connection failure.
+func connectError(err error) error {
+	var reply *textproto.Error
+	if errors.As(err, &reply) {
+		return replyError(SMTPStageConnect, reply)
+	}
+
+	return &SMTPSendError{Stage: SMTPStageConnect, Unsupported: errors.Is(err, ErrSMTPStartTLSNotSupported), err: err}
 }
 
 // replyError keeps the codes of a server reply and drops its text.

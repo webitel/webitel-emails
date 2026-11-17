@@ -28,9 +28,8 @@ const (
 	FinalHang = "hang"
 )
 
-// Config scripts the server. Replies are full reply lines keyed by "EHLO" (also for
-// HELO), "AUTH", "MAIL",
-// "RCPT", "RCPT <address>", "DATA" and "FINAL"; a missing key succeeds.
+// Config scripts SMTP replies by command, with success by default.
+// Use EHLO#1 for the first EHLO and RCPT <address> for a specific recipient.
 type Config struct {
 	// StartTLS offers STARTTLS on a plain listener instead of implicit TLS.
 	StartTLS bool
@@ -144,6 +143,11 @@ func (s *Server) serve(conn net.Conn) {
 	text := textproto.NewConn(conn)
 	secure := !s.cfg.StartTLS
 	var m Message
+	ehlos := 0
+	if reply := s.reply("GREETING"); reply != "" {
+		_ = text.PrintfLine("%s", reply)
+		return
+	}
 	_ = text.PrintfLine("220 fake ESMTP")
 
 	for {
@@ -154,6 +158,17 @@ func (s *Server) serve(conn net.Conn) {
 		verb, arg, _ := strings.Cut(line, " ")
 		switch strings.ToUpper(verb) {
 		case "EHLO", "HELO":
+			if reply := s.reply("HELO"); reply != "" && strings.EqualFold(verb, "HELO") {
+				_ = text.PrintfLine("%s", reply)
+				continue
+			}
+			if strings.EqualFold(verb, "EHLO") {
+				ehlos++
+				if reply := s.reply("EHLO#1"); reply != "" && ehlos == 1 {
+					_ = text.PrintfLine("%s", reply)
+					continue
+				}
+			}
 			if reply := s.reply("EHLO"); reply != "" {
 				_ = text.PrintfLine("%s", reply)
 				continue
@@ -179,6 +194,10 @@ func (s *Server) serve(conn net.Conn) {
 				_ = text.PrintfLine("250%s%s", sep, l)
 			}
 		case "STARTTLS":
+			if reply := s.reply("STARTTLS"); reply != "" {
+				_ = text.PrintfLine("%s", reply)
+				continue
+			}
 			_ = text.PrintfLine("220 ready")
 			tlsConn := tls.Server(conn, s.tls)
 			if tlsConn.Handshake() != nil {

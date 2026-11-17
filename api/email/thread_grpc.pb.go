@@ -31,6 +31,8 @@ const (
 	EmailThreads_CreateEmailThread_FullMethodName        = "/webitel.email.EmailThreads/CreateEmailThread"
 	EmailThreads_ListEmailSenderProfiles_FullMethodName  = "/webitel.email.EmailThreads/ListEmailSenderProfiles"
 	EmailThreads_UploadEmailAttachment_FullMethodName    = "/webitel.email.EmailThreads/UploadEmailAttachment"
+	EmailThreads_RetryEmailDelivery_FullMethodName       = "/webitel.email.EmailThreads/RetryEmailDelivery"
+	EmailThreads_CancelEmailDelivery_FullMethodName      = "/webitel.email.EmailThreads/CancelEmailDelivery"
 )
 
 // EmailThreadsClient is the client API for EmailThreads service.
@@ -83,6 +85,12 @@ type EmailThreadsClient interface {
 	// email.outbound.disabled, email.attachment.invalid, email.attachment.too_large,
 	// email.attachment.rejected, email.attachment.upload_busy, email.storage.unavailable.
 	UploadEmailAttachment(ctx context.Context, in *UploadEmailAttachmentRequest, opts ...grpc.CallOption) (*EmailAttachmentUpload, error)
+	// RetryEmailDelivery starts a new series for the same Message-ID. Requires the author,
+	// reply rights, and read/update access. See webitel-emails/README.md for stable error IDs.
+	RetryEmailDelivery(ctx context.Context, in *RetryEmailDeliveryRequest, opts ...grpc.CallOption) (*EmailDeliveryReceipt, error)
+	// CancelEmailDelivery permanently stops delivery before possible SMTP acceptance.
+	// Requires the author, visibility and read/update access. See webitel-emails/README.md for error IDs.
+	CancelEmailDelivery(ctx context.Context, in *CancelEmailDeliveryRequest, opts ...grpc.CallOption) (*EmailDeliveryReceipt, error)
 }
 
 type emailThreadsClient struct {
@@ -213,6 +221,26 @@ func (c *emailThreadsClient) UploadEmailAttachment(ctx context.Context, in *Uplo
 	return out, nil
 }
 
+func (c *emailThreadsClient) RetryEmailDelivery(ctx context.Context, in *RetryEmailDeliveryRequest, opts ...grpc.CallOption) (*EmailDeliveryReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailDeliveryReceipt)
+	err := c.cc.Invoke(ctx, EmailThreads_RetryEmailDelivery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *emailThreadsClient) CancelEmailDelivery(ctx context.Context, in *CancelEmailDeliveryRequest, opts ...grpc.CallOption) (*EmailDeliveryReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmailDeliveryReceipt)
+	err := c.cc.Invoke(ctx, EmailThreads_CancelEmailDelivery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmailThreadsServer is the server API for EmailThreads service.
 // All implementations must embed UnimplementedEmailThreadsServer
 // for forward compatibility.
@@ -263,6 +291,12 @@ type EmailThreadsServer interface {
 	// email.outbound.disabled, email.attachment.invalid, email.attachment.too_large,
 	// email.attachment.rejected, email.attachment.upload_busy, email.storage.unavailable.
 	UploadEmailAttachment(context.Context, *UploadEmailAttachmentRequest) (*EmailAttachmentUpload, error)
+	// RetryEmailDelivery starts a new series for the same Message-ID. Requires the author,
+	// reply rights, and read/update access. See webitel-emails/README.md for stable error IDs.
+	RetryEmailDelivery(context.Context, *RetryEmailDeliveryRequest) (*EmailDeliveryReceipt, error)
+	// CancelEmailDelivery permanently stops delivery before possible SMTP acceptance.
+	// Requires the author, visibility and read/update access. See webitel-emails/README.md for error IDs.
+	CancelEmailDelivery(context.Context, *CancelEmailDeliveryRequest) (*EmailDeliveryReceipt, error)
 	mustEmbedUnimplementedEmailThreadsServer()
 }
 
@@ -308,6 +342,12 @@ func (UnimplementedEmailThreadsServer) ListEmailSenderProfiles(context.Context, 
 }
 func (UnimplementedEmailThreadsServer) UploadEmailAttachment(context.Context, *UploadEmailAttachmentRequest) (*EmailAttachmentUpload, error) {
 	return nil, status.Error(codes.Unimplemented, "method UploadEmailAttachment not implemented")
+}
+func (UnimplementedEmailThreadsServer) RetryEmailDelivery(context.Context, *RetryEmailDeliveryRequest) (*EmailDeliveryReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetryEmailDelivery not implemented")
+}
+func (UnimplementedEmailThreadsServer) CancelEmailDelivery(context.Context, *CancelEmailDeliveryRequest) (*EmailDeliveryReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelEmailDelivery not implemented")
 }
 func (UnimplementedEmailThreadsServer) mustEmbedUnimplementedEmailThreadsServer() {}
 func (UnimplementedEmailThreadsServer) testEmbeddedByValue()                      {}
@@ -546,6 +586,42 @@ func _EmailThreads_UploadEmailAttachment_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmailThreads_RetryEmailDelivery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetryEmailDeliveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).RetryEmailDelivery(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_RetryEmailDelivery_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).RetryEmailDelivery(ctx, req.(*RetryEmailDeliveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EmailThreads_CancelEmailDelivery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelEmailDeliveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailThreadsServer).CancelEmailDelivery(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailThreads_CancelEmailDelivery_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailThreadsServer).CancelEmailDelivery(ctx, req.(*CancelEmailDeliveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmailThreads_ServiceDesc is the grpc.ServiceDesc for EmailThreads service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -600,6 +676,14 @@ var EmailThreads_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UploadEmailAttachment",
 			Handler:    _EmailThreads_UploadEmailAttachment_Handler,
+		},
+		{
+			MethodName: "RetryEmailDelivery",
+			Handler:    _EmailThreads_RetryEmailDelivery_Handler,
+		},
+		{
+			MethodName: "CancelEmailDelivery",
+			Handler:    _EmailThreads_CancelEmailDelivery_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

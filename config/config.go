@@ -66,7 +66,19 @@ type OutboundConfig struct {
 	// DeliveryLease outlives a send, so recovery never takes a running one.
 	DeliveryLease            time.Duration `mapstructure:"delivery_lease"`
 	DeliveryRecoveryInterval time.Duration `mapstructure:"delivery_recovery_interval"`
+	// DeliveryRetryDelays are the pauses before the automatic retries of a series,
+	// counted from the failed attempt; an empty list turns them off.
+	DeliveryRetryDelays []time.Duration `mapstructure:"delivery_retry_delays"`
+	// DeliveryManualRetries is how many series an author may start by hand.
+	DeliveryManualRetries int `mapstructure:"delivery_manual_retries"`
 }
+
+// Bounds of the retry settings.
+const (
+	maxDeliveryRetries       = 10
+	maxDeliveryRetryDelay    = 24 * time.Hour
+	maxDeliveryManualRetries = 3
+)
 
 // maxUploadOverhead is the room an upload request needs beyond its file.
 const maxUploadOverhead = 64 << 10
@@ -350,6 +362,8 @@ func registerServiceFlags(flags *pflag.FlagSet) {
 	flags.Duration("outbound.delivery_send_timeout", 15*time.Minute, "maximum time of one SMTP send")
 	flags.Duration("outbound.delivery_lease", 20*time.Minute, "how long a claimed email belongs to its worker")
 	flags.Duration("outbound.delivery_recovery_interval", time.Minute, "how often abandoned sends are finished")
+	flags.String("outbound.delivery_retry_delays", "1m,5m,15m", "comma-separated pauses before the automatic retries of a series; empty turns them off")
+	flags.Int("outbound.delivery_manual_retries", 1, "how many series an author may start by hand (0-3)")
 }
 
 func (c *Config) validate() error {
@@ -617,6 +631,15 @@ func (c *Config) validateOutbound() error {
 		return fmt.Errorf("config: outbound SMTP timeouts and delivery_send_timeout must be positive")
 	case o.DeliveryLease < o.DeliverySendTimeout+time.Minute:
 		return fmt.Errorf("config: outbound.delivery_lease must exceed delivery_send_timeout by at least 1m")
+	case len(o.DeliveryRetryDelays) > maxDeliveryRetries:
+		return fmt.Errorf("config: outbound.delivery_retry_delays allows at most %d delays", maxDeliveryRetries)
+	case o.DeliveryManualRetries < 0 || o.DeliveryManualRetries > maxDeliveryManualRetries:
+		return fmt.Errorf("config: outbound.delivery_manual_retries must be between 0 and %d", maxDeliveryManualRetries)
+	}
+	for i, delay := range o.DeliveryRetryDelays {
+		if delay <= 0 || delay > maxDeliveryRetryDelay || (i > 0 && delay < o.DeliveryRetryDelays[i-1]) {
+			return fmt.Errorf("config: outbound.delivery_retry_delays must be positive, at most %s each and not decreasing", maxDeliveryRetryDelay)
+		}
 	}
 
 	return nil

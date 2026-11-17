@@ -26,6 +26,7 @@ var Module = fx.Module(
 		func(client *storageinfra.Client) AttachmentUploader { return client },
 		NewEmailAttachmentUploadService,
 		NewEmailSendService,
+		NewEmailDeliveryService,
 		fx.Annotate(
 			NewAttachmentUploadCleanup,
 			fx.As(new(leader.Task)),

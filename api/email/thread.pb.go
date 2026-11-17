@@ -624,6 +624,8 @@ const (
 	EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING     EmailDeliveryStatus = 1
 	EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_SENT        EmailDeliveryStatus = 2
 	EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_FAILED      EmailDeliveryStatus = 3
+	// Stopped by its author before the server could accept it; final.
+	EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_CANCELLED EmailDeliveryStatus = 4
 )
 
 // Enum value maps for EmailDeliveryStatus.
@@ -633,12 +635,14 @@ var (
 		1: "EMAIL_DELIVERY_STATUS_PENDING",
 		2: "EMAIL_DELIVERY_STATUS_SENT",
 		3: "EMAIL_DELIVERY_STATUS_FAILED",
+		4: "EMAIL_DELIVERY_STATUS_CANCELLED",
 	}
 	EmailDeliveryStatus_value = map[string]int32{
 		"EMAIL_DELIVERY_STATUS_UNSPECIFIED": 0,
 		"EMAIL_DELIVERY_STATUS_PENDING":     1,
 		"EMAIL_DELIVERY_STATUS_SENT":        2,
 		"EMAIL_DELIVERY_STATUS_FAILED":      3,
+		"EMAIL_DELIVERY_STATUS_CANCELLED":   4,
 	}
 )
 
@@ -1725,9 +1729,17 @@ type EmailMessage struct {
 	// Short text chosen by the code; never the raw SMTP reply.
 	DeliveryError string `protobuf:"bytes,26,opt,name=delivery_error,json=deliveryError,proto3" json:"delivery_error,omitempty"`
 	// Unix milliseconds of the SMTP acceptance.
-	DeliveredAt   int64 `protobuf:"varint,27,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DeliveredAt int64 `protobuf:"varint,27,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
+	// Grows with each visible delivery change and guards Retry and Cancel.
+	// Zero for inbound email and outbound email before its first change.
+	DeliveryVersion int64 `protobuf:"varint,28,opt,name=delivery_version,json=deliveryVersion,proto3" json:"delivery_version,omitempty"`
+	// Unix milliseconds when a scheduled automatic retry becomes due; set only
+	// while pending. Once past, the attempt may wait for a worker or be running.
+	DeliveryRetryAt *int64 `protobuf:"varint,29,opt,name=delivery_retry_at,json=deliveryRetryAt,proto3,oneof" json:"delivery_retry_at,omitempty"`
+	// The caller may call RetryEmailDelivery now; the command checks it again.
+	ManualRetryAvailable bool `protobuf:"varint,30,opt,name=manual_retry_available,json=manualRetryAvailable,proto3" json:"manual_retry_available,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *EmailMessage) Reset() {
@@ -1947,6 +1959,27 @@ func (x *EmailMessage) GetDeliveredAt() int64 {
 		return x.DeliveredAt
 	}
 	return 0
+}
+
+func (x *EmailMessage) GetDeliveryVersion() int64 {
+	if x != nil {
+		return x.DeliveryVersion
+	}
+	return 0
+}
+
+func (x *EmailMessage) GetDeliveryRetryAt() int64 {
+	if x != nil && x.DeliveryRetryAt != nil {
+		return *x.DeliveryRetryAt
+	}
+	return 0
+}
+
+func (x *EmailMessage) GetManualRetryAvailable() bool {
+	if x != nil {
+		return x.ManualRetryAvailable
+	}
+	return false
 }
 
 // ListEmailThreadMessagesRequest selects a page of the emails of a conversation.
@@ -3133,6 +3166,208 @@ func (x *EmailAttachmentUpload) GetExpiresAt() int64 {
 	return 0
 }
 
+// RetryEmailDeliveryRequest is a manual retry of a failed outbound email.
+type RetryEmailDeliveryRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId  int64                  `protobuf:"varint,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	MessageId int64                  `protobuf:"varint,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	// delivery_version the caller read; required, 0 included.
+	ExpectedDeliveryVersion *int64 `protobuf:"varint,3,opt,name=expected_delivery_version,json=expectedDeliveryVersion,proto3,oneof" json:"expected_delivery_version,omitempty"`
+	// The current attempt; 0 for a processed conversation without an agent.
+	AttemptId              int64 `protobuf:"varint,4,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	ExpectedAttemptVersion int64 `protobuf:"varint,5,opt,name=expected_attempt_version,json=expectedAttemptVersion,proto3" json:"expected_attempt_version,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *RetryEmailDeliveryRequest) Reset() {
+	*x = RetryEmailDeliveryRequest{}
+	mi := &file_thread_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryEmailDeliveryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryEmailDeliveryRequest) ProtoMessage() {}
+
+func (x *RetryEmailDeliveryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryEmailDeliveryRequest.ProtoReflect.Descriptor instead.
+func (*RetryEmailDeliveryRequest) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *RetryEmailDeliveryRequest) GetThreadId() int64 {
+	if x != nil {
+		return x.ThreadId
+	}
+	return 0
+}
+
+func (x *RetryEmailDeliveryRequest) GetMessageId() int64 {
+	if x != nil {
+		return x.MessageId
+	}
+	return 0
+}
+
+func (x *RetryEmailDeliveryRequest) GetExpectedDeliveryVersion() int64 {
+	if x != nil && x.ExpectedDeliveryVersion != nil {
+		return *x.ExpectedDeliveryVersion
+	}
+	return 0
+}
+
+func (x *RetryEmailDeliveryRequest) GetAttemptId() int64 {
+	if x != nil {
+		return x.AttemptId
+	}
+	return 0
+}
+
+func (x *RetryEmailDeliveryRequest) GetExpectedAttemptVersion() int64 {
+	if x != nil {
+		return x.ExpectedAttemptVersion
+	}
+	return 0
+}
+
+// CancelEmailDeliveryRequest stops the delivery of an outbound email.
+type CancelEmailDeliveryRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ThreadId  int64                  `protobuf:"varint,1,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	MessageId int64                  `protobuf:"varint,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	// delivery_version the caller read; required, 0 included.
+	ExpectedDeliveryVersion *int64 `protobuf:"varint,3,opt,name=expected_delivery_version,json=expectedDeliveryVersion,proto3,oneof" json:"expected_delivery_version,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *CancelEmailDeliveryRequest) Reset() {
+	*x = CancelEmailDeliveryRequest{}
+	mi := &file_thread_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelEmailDeliveryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelEmailDeliveryRequest) ProtoMessage() {}
+
+func (x *CancelEmailDeliveryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelEmailDeliveryRequest.ProtoReflect.Descriptor instead.
+func (*CancelEmailDeliveryRequest) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *CancelEmailDeliveryRequest) GetThreadId() int64 {
+	if x != nil {
+		return x.ThreadId
+	}
+	return 0
+}
+
+func (x *CancelEmailDeliveryRequest) GetMessageId() int64 {
+	if x != nil {
+		return x.MessageId
+	}
+	return 0
+}
+
+func (x *CancelEmailDeliveryRequest) GetExpectedDeliveryVersion() int64 {
+	if x != nil && x.ExpectedDeliveryVersion != nil {
+		return *x.ExpectedDeliveryVersion
+	}
+	return 0
+}
+
+// EmailDeliveryReceipt is the accepted change; the email itself is read again.
+type EmailDeliveryReceipt struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	MessageId       int64                  `protobuf:"varint,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	DeliveryStatus  EmailDeliveryStatus    `protobuf:"varint,2,opt,name=delivery_status,json=deliveryStatus,proto3,enum=webitel.email.EmailDeliveryStatus" json:"delivery_status,omitempty"`
+	DeliveryVersion int64                  `protobuf:"varint,3,opt,name=delivery_version,json=deliveryVersion,proto3" json:"delivery_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *EmailDeliveryReceipt) Reset() {
+	*x = EmailDeliveryReceipt{}
+	mi := &file_thread_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmailDeliveryReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmailDeliveryReceipt) ProtoMessage() {}
+
+func (x *EmailDeliveryReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_thread_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmailDeliveryReceipt.ProtoReflect.Descriptor instead.
+func (*EmailDeliveryReceipt) Descriptor() ([]byte, []int) {
+	return file_thread_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *EmailDeliveryReceipt) GetMessageId() int64 {
+	if x != nil {
+		return x.MessageId
+	}
+	return 0
+}
+
+func (x *EmailDeliveryReceipt) GetDeliveryStatus() EmailDeliveryStatus {
+	if x != nil {
+		return x.DeliveryStatus
+	}
+	return EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_UNSPECIFIED
+}
+
+func (x *EmailDeliveryReceipt) GetDeliveryVersion() int64 {
+	if x != nil {
+		return x.DeliveryVersion
+	}
+	return 0
+}
+
 var File_thread_proto protoreflect.FileDescriptor
 
 const file_thread_proto_rawDesc = "" +
@@ -3215,7 +3450,7 @@ const file_thread_proto_rawDesc = "" +
 	"\n" +
 	"content_id\x18\x06 \x01(\tR\tcontentId\x129\n" +
 	"\x05state\x18\a \x01(\x0e2#.webitel.email.EmailAttachmentStateR\x05state\x12R\n" +
-	"\x0eskipped_reason\x18\b \x01(\x0e2+.webitel.email.EmailAttachmentSkippedReasonR\rskippedReason\"\xf4\t\n" +
+	"\x0eskipped_reason\x18\b \x01(\x0e2+.webitel.email.EmailAttachmentSkippedReasonR\rskippedReason\"\x9c\v\n" +
 	"\fEmailMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1b\n" +
 	"\tthread_id\x18\x02 \x01(\x03R\bthreadId\x12\x1d\n" +
@@ -3246,7 +3481,11 @@ const file_thread_proto_rawDesc = "" +
 	"\x0fdelivery_status\x18\x18 \x01(\x0e2\".webitel.email.EmailDeliveryStatusR\x0edeliveryStatus\x12Q\n" +
 	"\x13delivery_error_code\x18\x19 \x01(\x0e2!.webitel.email.EmailDeliveryErrorR\x11deliveryErrorCode\x12%\n" +
 	"\x0edelivery_error\x18\x1a \x01(\tR\rdeliveryError\x12!\n" +
-	"\fdelivered_at\x18\x1b \x01(\x03R\vdeliveredAt\"\xa1\x01\n" +
+	"\fdelivered_at\x18\x1b \x01(\x03R\vdeliveredAt\x12)\n" +
+	"\x10delivery_version\x18\x1c \x01(\x03R\x0fdeliveryVersion\x12/\n" +
+	"\x11delivery_retry_at\x18\x1d \x01(\x03H\x00R\x0fdeliveryRetryAt\x88\x01\x01\x124\n" +
+	"\x16manual_retry_available\x18\x1e \x01(\bR\x14manualRetryAvailableB\x14\n" +
+	"\x12_delivery_retry_at\"\xa1\x01\n" +
 	"\x1eListEmailThreadMessagesRequest\x12\x1b\n" +
 	"\tthread_id\x18\x01 \x01(\x03R\bthreadId\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x05R\x04size\x12\x16\n" +
@@ -3345,7 +3584,27 @@ const file_thread_proto_rawDesc = "" +
 	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x12\n" +
 	"\x04size\x18\x04 \x01(\x03R\x04size\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x05 \x01(\x03R\texpiresAt*\xe5\x01\n" +
+	"expires_at\x18\x05 \x01(\x03R\texpiresAt\"\x8f\x02\n" +
+	"\x19RetryEmailDeliveryRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\x03R\bthreadId\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x02 \x01(\x03R\tmessageId\x12?\n" +
+	"\x19expected_delivery_version\x18\x03 \x01(\x03H\x00R\x17expectedDeliveryVersion\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\x04 \x01(\x03R\tattemptId\x128\n" +
+	"\x18expected_attempt_version\x18\x05 \x01(\x03R\x16expectedAttemptVersionB\x1c\n" +
+	"\x1a_expected_delivery_version\"\xb7\x01\n" +
+	"\x1aCancelEmailDeliveryRequest\x12\x1b\n" +
+	"\tthread_id\x18\x01 \x01(\x03R\bthreadId\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x02 \x01(\x03R\tmessageId\x12?\n" +
+	"\x19expected_delivery_version\x18\x03 \x01(\x03H\x00R\x17expectedDeliveryVersion\x88\x01\x01B\x1c\n" +
+	"\x1a_expected_delivery_version\"\xad\x01\n" +
+	"\x14EmailDeliveryReceipt\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x01 \x01(\x03R\tmessageId\x12K\n" +
+	"\x0fdelivery_status\x18\x02 \x01(\x0e2\".webitel.email.EmailDeliveryStatusR\x0edeliveryStatus\x12)\n" +
+	"\x10delivery_version\x18\x03 \x01(\x03R\x0fdeliveryVersion*\xe5\x01\n" +
 	"\x11EmailThreadStatus\x12#\n" +
 	"\x1fEMAIL_THREAD_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EMAIL_THREAD_STATUS_NEW\x10\x01\x12#\n" +
@@ -3401,12 +3660,13 @@ const file_thread_proto_rawDesc = "" +
 	"4EMAIL_ATTACHMENT_SKIPPED_REASON_COUNT_LIMIT_EXCEEDED\x10\x01\x127\n" +
 	"3EMAIL_ATTACHMENT_SKIPPED_REASON_SIZE_LIMIT_EXCEEDED\x10\x02\x12=\n" +
 	"9EMAIL_ATTACHMENT_SKIPPED_REASON_TOTAL_SIZE_LIMIT_EXCEEDED\x10\x03\x12.\n" +
-	"*EMAIL_ATTACHMENT_SKIPPED_REASON_READ_ERROR\x10\x04*\xa1\x01\n" +
+	"*EMAIL_ATTACHMENT_SKIPPED_REASON_READ_ERROR\x10\x04*\xc6\x01\n" +
 	"\x13EmailDeliveryStatus\x12%\n" +
 	"!EMAIL_DELIVERY_STATUS_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dEMAIL_DELIVERY_STATUS_PENDING\x10\x01\x12\x1e\n" +
 	"\x1aEMAIL_DELIVERY_STATUS_SENT\x10\x02\x12 \n" +
-	"\x1cEMAIL_DELIVERY_STATUS_FAILED\x10\x03*\xa3\x03\n" +
+	"\x1cEMAIL_DELIVERY_STATUS_FAILED\x10\x03\x12#\n" +
+	"\x1fEMAIL_DELIVERY_STATUS_CANCELLED\x10\x04*\xa3\x03\n" +
 	"\x12EmailDeliveryError\x12$\n" +
 	" EMAIL_DELIVERY_ERROR_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19EMAIL_DELIVERY_ERROR_AUTH\x10\x01\x12+\n" +
@@ -3421,7 +3681,7 @@ const file_thread_proto_rawDesc = "" +
 	"\x10EmailContactMode\x12\"\n" +
 	"\x1eEMAIL_CONTACT_MODE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17EMAIL_CONTACT_MODE_LINK\x10\x01\x12\x1b\n" +
-	"\x17EMAIL_CONTACT_MODE_NONE\x10\x022\x8b\x0f\n" +
+	"\x17EMAIL_CONTACT_MODE_NONE\x10\x022\xee\x11\n" +
 	"\fEmailThreads\x12\xab\x01\n" +
 	"\x16BindEmailThreadContact\x12,.webitel.email.BindEmailThreadContactRequest\x1a-.webitel.email.BindEmailThreadContactResponse\"4\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02*:\x01*\x1a%/v1/email/threads/{thread_id}/contact\x12\xae\x01\n" +
 	"\x18UnbindEmailThreadContact\x12..webitel.email.UnbindEmailThreadContactRequest\x1a/.webitel.email.UnbindEmailThreadContactResponse\"1\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02'*%/v1/email/threads/{thread_id}/contact\x12y\n" +
@@ -3434,7 +3694,9 @@ const file_thread_proto_rawDesc = "" +
 	"\x0eSendEmailReply\x12$.webitel.email.SendEmailReplyRequest\x1a\x1b.webitel.email.EmailMessage\"5\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02+:\x01*\"&/v1/email/threads/{thread_id}/messages\x12\x88\x01\n" +
 	"\x11CreateEmailThread\x12'.webitel.email.CreateEmailThreadRequest\x1a(.webitel.email.CreateEmailThreadResponse\" \x90\xb5\x18\x00\x82\xd3\xe4\x93\x02\x16:\x01*\"\x11/v1/email/threads\x12\x96\x01\n" +
 	"\x17ListEmailSenderProfiles\x12-.webitel.email.ListEmailSenderProfilesRequest\x1a%.webitel.email.EmailSenderProfileList\"%\x90\xb5\x18\x00\x82\xd3\xe4\x93\x02\x1b\x12\x19/v1/email/sender_profiles\x12\x90\x01\n" +
-	"\x15UploadEmailAttachment\x12+.webitel.email.UploadEmailAttachmentRequest\x1a$.webitel.email.EmailAttachmentUpload\"$\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/v1/email/attachments\x1a\x10\x8a\xb5\x18\femail_threadB\xa8\x01\n" +
+	"\x15UploadEmailAttachment\x12+.webitel.email.UploadEmailAttachmentRequest\x1a$.webitel.email.EmailAttachmentUpload\"$\x90\xb5\x18\x01\x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/v1/email/attachments\x12\xad\x01\n" +
+	"\x12RetryEmailDelivery\x12(.webitel.email.RetryEmailDeliveryRequest\x1a#.webitel.email.EmailDeliveryReceipt\"H\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02>:\x01*\"9/v1/email/threads/{thread_id}/messages/{message_id}/retry\x12\xb0\x01\n" +
+	"\x13CancelEmailDelivery\x12).webitel.email.CancelEmailDeliveryRequest\x1a#.webitel.email.EmailDeliveryReceipt\"I\x90\xb5\x18\x02\x82\xd3\xe4\x93\x02?:\x01*\":/v1/email/threads/{thread_id}/messages/{message_id}/cancel\x1a\x10\x8a\xb5\x18\femail_threadB\xa8\x01\n" +
 	"\x11com.webitel.emailB\vThreadProtoP\x01Z1github.com/webitel/webitel-emails/api/email;email\xa2\x02\x03WEX\xaa\x02\rWebitel.Email\xca\x02\rWebitel\\Email\xe2\x02\x19Webitel\\Email\\GPBMetadata\xea\x02\x0eWebitel::Emailb\x06proto3"
 
 var (
@@ -3450,7 +3712,7 @@ func file_thread_proto_rawDescGZIP() []byte {
 }
 
 var file_thread_proto_enumTypes = make([]protoimpl.EnumInfo, 14)
-var file_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_thread_proto_goTypes = []any{
 	(EmailThreadStatus)(0),                   // 0: webitel.email.EmailThreadStatus
 	(EmailThreadAccess)(0),                   // 1: webitel.email.EmailThreadAccess
@@ -3496,16 +3758,19 @@ var file_thread_proto_goTypes = []any{
 	(*EmailSenderProfileList)(nil),           // 41: webitel.email.EmailSenderProfileList
 	(*UploadEmailAttachmentRequest)(nil),     // 42: webitel.email.UploadEmailAttachmentRequest
 	(*EmailAttachmentUpload)(nil),            // 43: webitel.email.EmailAttachmentUpload
-	(*Lookup)(nil),                           // 44: general.Lookup
+	(*RetryEmailDeliveryRequest)(nil),        // 44: webitel.email.RetryEmailDeliveryRequest
+	(*CancelEmailDeliveryRequest)(nil),       // 45: webitel.email.CancelEmailDeliveryRequest
+	(*EmailDeliveryReceipt)(nil),             // 46: webitel.email.EmailDeliveryReceipt
+	(*Lookup)(nil),                           // 47: general.Lookup
 }
 var file_thread_proto_depIdxs = []int32{
 	4,  // 0: webitel.email.EmailThreadPreview.direction:type_name -> webitel.email.EmailMessageDirection
 	18, // 1: webitel.email.EmailThreadPreview.from:type_name -> webitel.email.EmailAddress
-	44, // 2: webitel.email.EmailThread.profile:type_name -> general.Lookup
+	47, // 2: webitel.email.EmailThread.profile:type_name -> general.Lookup
 	0,  // 3: webitel.email.EmailThread.status:type_name -> webitel.email.EmailThreadStatus
 	3,  // 4: webitel.email.EmailThread.contact_resolution_state:type_name -> webitel.email.EmailContactResolutionState
-	44, // 5: webitel.email.EmailThread.current_user:type_name -> general.Lookup
-	44, // 6: webitel.email.EmailThread.last_handled_user:type_name -> general.Lookup
+	47, // 5: webitel.email.EmailThread.current_user:type_name -> general.Lookup
+	47, // 6: webitel.email.EmailThread.last_handled_user:type_name -> general.Lookup
 	1,  // 7: webitel.email.EmailThread.access:type_name -> webitel.email.EmailThreadAccess
 	19, // 8: webitel.email.EmailThread.preview:type_name -> webitel.email.EmailThreadPreview
 	2,  // 9: webitel.email.ListEmailThreadsRequest.assignment:type_name -> webitel.email.EmailThreadAssignment
@@ -3524,15 +3789,15 @@ var file_thread_proto_depIdxs = []int32{
 	7,  // 22: webitel.email.EmailMessage.inline_content_status:type_name -> webitel.email.EmailInlineContentStatus
 	24, // 23: webitel.email.EmailMessage.bounce:type_name -> webitel.email.EmailBounce
 	25, // 24: webitel.email.EmailMessage.attachments:type_name -> webitel.email.EmailAttachment
-	44, // 25: webitel.email.EmailMessage.author:type_name -> general.Lookup
+	47, // 25: webitel.email.EmailMessage.author:type_name -> general.Lookup
 	18, // 26: webitel.email.EmailMessage.bcc:type_name -> webitel.email.EmailAddress
 	11, // 27: webitel.email.EmailMessage.delivery_status:type_name -> webitel.email.EmailDeliveryStatus
 	12, // 28: webitel.email.EmailMessage.delivery_error_code:type_name -> webitel.email.EmailDeliveryError
 	6,  // 29: webitel.email.ListEmailThreadMessagesRequest.order:type_name -> webitel.email.EmailMessageOrder
 	26, // 30: webitel.email.EmailMessageList.items:type_name -> webitel.email.EmailMessage
-	44, // 31: webitel.email.EmailThreadAction.actor:type_name -> general.Lookup
-	44, // 32: webitel.email.EmailThreadAction.agent:type_name -> general.Lookup
-	44, // 33: webitel.email.EmailThreadAction.transfer_to_user:type_name -> general.Lookup
+	47, // 31: webitel.email.EmailThreadAction.actor:type_name -> general.Lookup
+	47, // 32: webitel.email.EmailThreadAction.agent:type_name -> general.Lookup
+	47, // 33: webitel.email.EmailThreadAction.transfer_to_user:type_name -> general.Lookup
 	33, // 34: webitel.email.EmailThreadActionList.items:type_name -> webitel.email.EmailThreadAction
 	18, // 35: webitel.email.InputEmailMessage.to:type_name -> webitel.email.EmailAddress
 	18, // 36: webitel.email.InputEmailMessage.cc:type_name -> webitel.email.EmailAddress
@@ -3543,35 +3808,40 @@ var file_thread_proto_depIdxs = []int32{
 	20, // 41: webitel.email.CreateEmailThreadResponse.thread:type_name -> webitel.email.EmailThread
 	26, // 42: webitel.email.CreateEmailThreadResponse.message:type_name -> webitel.email.EmailMessage
 	40, // 43: webitel.email.EmailSenderProfileList.items:type_name -> webitel.email.EmailSenderProfile
-	14, // 44: webitel.email.EmailThreads.BindEmailThreadContact:input_type -> webitel.email.BindEmailThreadContactRequest
-	16, // 45: webitel.email.EmailThreads.UnbindEmailThreadContact:input_type -> webitel.email.UnbindEmailThreadContactRequest
-	21, // 46: webitel.email.EmailThreads.ListEmailThreads:input_type -> webitel.email.ListEmailThreadsRequest
-	23, // 47: webitel.email.EmailThreads.LocateEmailThread:input_type -> webitel.email.LocateEmailThreadRequest
-	27, // 48: webitel.email.EmailThreads.ListEmailThreadMessages:input_type -> webitel.email.ListEmailThreadMessagesRequest
-	29, // 49: webitel.email.EmailThreads.LocateEmailThreadMessage:input_type -> webitel.email.LocateEmailThreadMessageRequest
-	30, // 50: webitel.email.EmailThreads.GetEmailAttachmentLink:input_type -> webitel.email.GetEmailAttachmentLinkRequest
-	32, // 51: webitel.email.EmailThreads.ListEmailThreadActions:input_type -> webitel.email.ListEmailThreadActionsRequest
-	36, // 52: webitel.email.EmailThreads.SendEmailReply:input_type -> webitel.email.SendEmailReplyRequest
-	37, // 53: webitel.email.EmailThreads.CreateEmailThread:input_type -> webitel.email.CreateEmailThreadRequest
-	39, // 54: webitel.email.EmailThreads.ListEmailSenderProfiles:input_type -> webitel.email.ListEmailSenderProfilesRequest
-	42, // 55: webitel.email.EmailThreads.UploadEmailAttachment:input_type -> webitel.email.UploadEmailAttachmentRequest
-	15, // 56: webitel.email.EmailThreads.BindEmailThreadContact:output_type -> webitel.email.BindEmailThreadContactResponse
-	17, // 57: webitel.email.EmailThreads.UnbindEmailThreadContact:output_type -> webitel.email.UnbindEmailThreadContactResponse
-	22, // 58: webitel.email.EmailThreads.ListEmailThreads:output_type -> webitel.email.EmailThreadList
-	20, // 59: webitel.email.EmailThreads.LocateEmailThread:output_type -> webitel.email.EmailThread
-	28, // 60: webitel.email.EmailThreads.ListEmailThreadMessages:output_type -> webitel.email.EmailMessageList
-	26, // 61: webitel.email.EmailThreads.LocateEmailThreadMessage:output_type -> webitel.email.EmailMessage
-	31, // 62: webitel.email.EmailThreads.GetEmailAttachmentLink:output_type -> webitel.email.GetEmailAttachmentLinkResponse
-	34, // 63: webitel.email.EmailThreads.ListEmailThreadActions:output_type -> webitel.email.EmailThreadActionList
-	26, // 64: webitel.email.EmailThreads.SendEmailReply:output_type -> webitel.email.EmailMessage
-	38, // 65: webitel.email.EmailThreads.CreateEmailThread:output_type -> webitel.email.CreateEmailThreadResponse
-	41, // 66: webitel.email.EmailThreads.ListEmailSenderProfiles:output_type -> webitel.email.EmailSenderProfileList
-	43, // 67: webitel.email.EmailThreads.UploadEmailAttachment:output_type -> webitel.email.EmailAttachmentUpload
-	56, // [56:68] is the sub-list for method output_type
-	44, // [44:56] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	11, // 44: webitel.email.EmailDeliveryReceipt.delivery_status:type_name -> webitel.email.EmailDeliveryStatus
+	14, // 45: webitel.email.EmailThreads.BindEmailThreadContact:input_type -> webitel.email.BindEmailThreadContactRequest
+	16, // 46: webitel.email.EmailThreads.UnbindEmailThreadContact:input_type -> webitel.email.UnbindEmailThreadContactRequest
+	21, // 47: webitel.email.EmailThreads.ListEmailThreads:input_type -> webitel.email.ListEmailThreadsRequest
+	23, // 48: webitel.email.EmailThreads.LocateEmailThread:input_type -> webitel.email.LocateEmailThreadRequest
+	27, // 49: webitel.email.EmailThreads.ListEmailThreadMessages:input_type -> webitel.email.ListEmailThreadMessagesRequest
+	29, // 50: webitel.email.EmailThreads.LocateEmailThreadMessage:input_type -> webitel.email.LocateEmailThreadMessageRequest
+	30, // 51: webitel.email.EmailThreads.GetEmailAttachmentLink:input_type -> webitel.email.GetEmailAttachmentLinkRequest
+	32, // 52: webitel.email.EmailThreads.ListEmailThreadActions:input_type -> webitel.email.ListEmailThreadActionsRequest
+	36, // 53: webitel.email.EmailThreads.SendEmailReply:input_type -> webitel.email.SendEmailReplyRequest
+	37, // 54: webitel.email.EmailThreads.CreateEmailThread:input_type -> webitel.email.CreateEmailThreadRequest
+	39, // 55: webitel.email.EmailThreads.ListEmailSenderProfiles:input_type -> webitel.email.ListEmailSenderProfilesRequest
+	42, // 56: webitel.email.EmailThreads.UploadEmailAttachment:input_type -> webitel.email.UploadEmailAttachmentRequest
+	44, // 57: webitel.email.EmailThreads.RetryEmailDelivery:input_type -> webitel.email.RetryEmailDeliveryRequest
+	45, // 58: webitel.email.EmailThreads.CancelEmailDelivery:input_type -> webitel.email.CancelEmailDeliveryRequest
+	15, // 59: webitel.email.EmailThreads.BindEmailThreadContact:output_type -> webitel.email.BindEmailThreadContactResponse
+	17, // 60: webitel.email.EmailThreads.UnbindEmailThreadContact:output_type -> webitel.email.UnbindEmailThreadContactResponse
+	22, // 61: webitel.email.EmailThreads.ListEmailThreads:output_type -> webitel.email.EmailThreadList
+	20, // 62: webitel.email.EmailThreads.LocateEmailThread:output_type -> webitel.email.EmailThread
+	28, // 63: webitel.email.EmailThreads.ListEmailThreadMessages:output_type -> webitel.email.EmailMessageList
+	26, // 64: webitel.email.EmailThreads.LocateEmailThreadMessage:output_type -> webitel.email.EmailMessage
+	31, // 65: webitel.email.EmailThreads.GetEmailAttachmentLink:output_type -> webitel.email.GetEmailAttachmentLinkResponse
+	34, // 66: webitel.email.EmailThreads.ListEmailThreadActions:output_type -> webitel.email.EmailThreadActionList
+	26, // 67: webitel.email.EmailThreads.SendEmailReply:output_type -> webitel.email.EmailMessage
+	38, // 68: webitel.email.EmailThreads.CreateEmailThread:output_type -> webitel.email.CreateEmailThreadResponse
+	41, // 69: webitel.email.EmailThreads.ListEmailSenderProfiles:output_type -> webitel.email.EmailSenderProfileList
+	43, // 70: webitel.email.EmailThreads.UploadEmailAttachment:output_type -> webitel.email.EmailAttachmentUpload
+	46, // 71: webitel.email.EmailThreads.RetryEmailDelivery:output_type -> webitel.email.EmailDeliveryReceipt
+	46, // 72: webitel.email.EmailThreads.CancelEmailDelivery:output_type -> webitel.email.EmailDeliveryReceipt
+	59, // [59:73] is the sub-list for method output_type
+	45, // [45:59] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_thread_proto_init() }
@@ -3580,13 +3850,16 @@ func file_thread_proto_init() {
 		return
 	}
 	file_general_proto_init()
+	file_thread_proto_msgTypes[12].OneofWrappers = []any{}
+	file_thread_proto_msgTypes[30].OneofWrappers = []any{}
+	file_thread_proto_msgTypes[31].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_thread_proto_rawDesc), len(file_thread_proto_rawDesc)),
 			NumEnums:      14,
-			NumMessages:   30,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

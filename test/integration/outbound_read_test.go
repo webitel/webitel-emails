@@ -35,10 +35,18 @@ func bouncing(messageID string) emailOption {
 	return func(e *model.ParsedEmail) { e.Bounce.OriginalMessageID = messageID }
 }
 
-// finish stores the result of the queued attempt of a message.
+// finish stores the result of the queued attempt of a message; only a committed
+// attempt may be sent.
 func (e *deliveryEnv) finish(status model.EmailDeliveryStatus, code model.EmailDeliveryError) {
-	if _, err := e.deliveries.Finish(context.Background(), e.claim(time.Minute), status, code); err != nil {
-		e.t.Fatal(err)
+	d := e.claim(time.Minute)
+	if status == model.EmailDeliveryStatusSent {
+		if ok, err := e.deliveries.Commit(context.Background(), d); err != nil || !ok {
+			e.t.Fatalf("commit = %v, %v", ok, err)
+		}
+	}
+	outcome := store.EmailDeliveryOutcome{Status: status, Code: code}
+	if applied, _, err := e.deliveries.Finish(context.Background(), d, outcome); err != nil || !applied {
+		e.t.Fatalf("finish = %v, %v", applied, err)
 	}
 }
 

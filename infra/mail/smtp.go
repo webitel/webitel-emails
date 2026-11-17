@@ -1,13 +1,16 @@
 package mail
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -81,7 +84,7 @@ func (c *smtpClient) Test(ctx context.Context, connection SMTPConnection) error 
 	}
 	defer rawConnection.Close()
 
-	client, err := startSMTP(ctx, rawConnection, connection, tlsConfig, false)
+	client, _, err := startSMTP(ctx, rawConnection, connection, tlsConfig, false)
 	if err != nil {
 		return err
 	}
@@ -101,51 +104,100 @@ func (c *smtpClient) Test(ctx context.Context, connection SMTPConnection) error 
 	return nil
 }
 
-// startSMTP greets the server over conn and secures the session as the profile requires.
-// greet checks EHLO/HELO at once; otherwise net/smtp hides a refused greeting as a
-// missing extension.
+// startSMTP greets the server and applies the configured TLS mode.
+// With greet, it preserves a temporary EHLO refusal that the HELO fallback can hide.
 func startSMTP(
 	ctx context.Context,
 	conn net.Conn,
 	connection SMTPConnection,
 	tlsConfig *tls.Config,
 	greet bool,
-) (*smtp.Client, error) {
+) (*smtp.Client, *textproto.Error, error) {
 	switch connection.Security {
 	case model.EmailConnectionSecurityTLS:
 		tlsConnection := tls.Client(conn, tlsConfig)
 		if err := tlsConnection.HandshakeContext(ctx); err != nil {
-			return nil, fmt.Errorf("smtp: TLS handshake: %w", err)
+			return nil, nil, fmt.Errorf("smtp: TLS handshake: %w", err)
 		}
 		conn = tlsConnection
 	case model.EmailConnectionSecurityStartTLS:
 	default:
-		return nil, fmt.Errorf("smtp: unsupported connection security %q", connection.Security)
+		return nil, nil, fmt.Errorf("smtp: unsupported connection security %q", connection.Security)
 	}
 
 	client, err := smtp.NewClient(conn, connection.Host)
 	if err != nil {
-		return nil, fmt.Errorf("smtp: initialize client: %w", err)
+		return nil, nil, fmt.Errorf("smtp: initialize client: %w", err)
 	}
+	var hidden *textproto.Error
 	if greet {
-		if err := client.Hello("localhost"); err != nil {
+		// Over the reader, not the connection: net/smtp tells TLS by the type of
+		// the connection.
+		recorder := &helloRecorder{}
+		client.Text.R = bufio.NewReader(io.TeeReader(client.Text.R, recorder))
+		recorder.recording = true
+		err := client.Hello("localhost")
+		recorder.recording = false
+		hidden = ehloRefusal(recorder.replies.Bytes())
+		if err != nil {
 			client.Close()
-			return nil, fmt.Errorf("smtp: greeting: %w", err)
+			// A refused HELO after a temporary refusal of EHLO: EHLO is the cause.
+			if hidden != nil {
+				return nil, nil, fmt.Errorf("smtp: greeting: %w", hidden)
+			}
+			return nil, nil, fmt.Errorf("smtp: greeting: %w", err)
 		}
 	}
 
 	if connection.Security == model.EmailConnectionSecurityStartTLS {
 		if supported, _ := client.Extension("STARTTLS"); !supported {
 			client.Close()
-			return nil, ErrSMTPStartTLSNotSupported
+			if hidden != nil {
+				return nil, nil, fmt.Errorf("smtp: greeting: %w", hidden)
+			}
+			return nil, nil, ErrSMTPStartTLSNotSupported
 		}
 		if err := client.StartTLS(tlsConfig); err != nil {
 			client.Close()
-			return nil, fmt.Errorf("smtp: start TLS: %w", err)
+			return nil, nil, fmt.Errorf("smtp: start TLS: %w", err)
 		}
 	}
 
-	return client, nil
+	return client, hidden, nil
+}
+
+// maxHelloReplies bounds what is kept of the replies to EHLO and HELO.
+const maxHelloReplies = 4 << 10
+
+// helloRecorder keeps what the server sends while net/smtp greets it: net/smtp
+// drops the reply to EHLO when it falls back to HELO.
+type helloRecorder struct {
+	recording bool
+	replies   bytes.Buffer
+}
+
+func (r *helloRecorder) Write(p []byte) (int, error) {
+	if r.recording {
+		r.replies.Write(p[:min(len(p), maxHelloReplies-r.replies.Len())])
+	}
+
+	return len(p), nil
+}
+
+// ehloRefusal reads the first recorded reply, the one to EHLO, and returns it when
+// it is a temporary refusal; a refusal for good means a server without EHLO.
+func ehloRefusal(replies []byte) *textproto.Error {
+	line, _, _ := bytes.Cut(replies, []byte("\n"))
+	line = bytes.TrimRight(line, "\r")
+	if len(line) < 4 || (line[3] != ' ' && line[3] != '-') {
+		return nil
+	}
+	code, err := strconv.Atoi(string(line[:3]))
+	if err != nil || code < 400 || code >= 500 {
+		return nil
+	}
+
+	return &textproto.Error{Code: code, Msg: string(line[4:])}
 }
 
 func smtpAuth(client *smtp.Client, connection SMTPConnection) (smtp.Auth, error) {

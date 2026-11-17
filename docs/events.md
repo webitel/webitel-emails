@@ -139,7 +139,7 @@ documentation, waits for confirmation by Workspace.
 |---|---|---|
 | `email.workspace.thread.changed` | `email.workspace.thread.changed.v1.<domain_id>.<user_id>` | An applied projection, a new action or participant, a contact change |
 | `email.workspace.message.created` | `email.workspace.message.created.v1.<domain_id>.<user_id>` | A Message of a regular Thread became `ready`; a contact resolved with it comes with this event |
-| `email.workspace.message.delivery` | `email.workspace.message.delivery.v1.<domain_id>.<user_id>` | An outbound Message got its final SMTP result (`sent` or `failed`), from its worker or from recovery; the status is read through the read API |
+| `email.workspace.message.delivery` | `email.workspace.message.delivery.v1.<domain_id>.<user_id>` | The delivery of an outbound Message changed visibly: `sent`, `failed`, a retry scheduled (worker or recovery), a manual retry or a cancel. Claims, commits, repeats and refused commands send none; the state is read through the read API |
 
 All go to `email.events` (topic) as `application/json`, persistent, with confirms
 and the headers `x-event-id`, `x-event-type` and `x-schema-version`, and

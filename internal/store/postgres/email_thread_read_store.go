@@ -29,7 +29,8 @@ func (s *emailThreadReadStore) Rights(
 	ctx context.Context,
 	domainID, userID, threadID int64,
 ) (store.EmailThreadRights, error) {
-	query := `SELECT (` + threadAssigned + `) FROM email.thread t
+	// A Thread without an agent makes the comparison NULL.
+	query := `SELECT coalesce(` + threadAssigned + `, false) FROM email.thread t
 WHERE t.id = @thread_id AND ` + visibleThread(model.EmailThreadAssignmentAll)
 
 	var assigned bool
