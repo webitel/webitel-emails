@@ -44,7 +44,9 @@ type UploadRequest struct {
 	MimeType string
 	// ReferenceID identifies the part; storage keeps it as the file reference.
 	ReferenceID string
-	Content     []byte
+	// UploadedBy is the user who uploaded the file; 0 for an inbound email.
+	UploadedBy int64
+	Content    []byte
 }
 
 // UploadResult is what storage reports about the stored file.
@@ -109,8 +111,8 @@ func NewClient(
 	return storageClient, nil
 }
 
-// UploadFile stores one file and returns its storage identity. The stream is not
-// retried automatically, so a half-sent upload is a failure for the caller.
+// UploadFile stores one file within the shared upload slots of inbound email.
+// The stream is not retried automatically, so a half-sent upload is a failure for the caller.
 func (c *Client) UploadFile(ctx context.Context, req UploadRequest) (UploadResult, error) {
 	select {
 	case c.uploadSlots <- struct{}{}:
@@ -119,6 +121,11 @@ func (c *Client) UploadFile(ctx context.Context, req UploadRequest) (UploadResul
 		return UploadResult{}, ctx.Err()
 	}
 
+	return c.Upload(ctx, req)
+}
+
+// Upload stores one file outside the shared slots; the caller bounds concurrency.
+func (c *Client) Upload(ctx context.Context, req UploadRequest) (UploadResult, error) {
 	uploadCtx, cancel := context.WithTimeout(ctx, c.uploadTimeout)
 	defer cancel()
 
@@ -232,11 +239,12 @@ func sendUpload(
 	metadata := &storagepb.UploadFileRequest{
 		Data: &storagepb.UploadFileRequest_Metadata_{
 			Metadata: &storagepb.UploadFileRequest_Metadata{
-				DomainId: req.DomainID,
-				Name:     sanitizeFileName(req.Name),
-				MimeType: req.MimeType,
-				Uuid:     req.ReferenceID,
-				Channel:  storagepb.UploadFileChannel_MailChannel,
+				DomainId:   req.DomainID,
+				Name:       SanitizeFileName(req.Name),
+				MimeType:   req.MimeType,
+				Uuid:       req.ReferenceID,
+				Channel:    storagepb.UploadFileChannel_MailChannel,
+				UploadedBy: req.UploadedBy,
 			},
 		},
 	}
@@ -262,9 +270,9 @@ func sendUpload(
 	return response, nil
 }
 
-// sanitizeFileName keeps the name storage stores usable: no path or control
+// SanitizeFileName keeps the name storage stores usable: no path or control
 // characters and bounded length. The display name in the manifest is untouched.
-func sanitizeFileName(name string) string {
+func SanitizeFileName(name string) string {
 	cleaned := strings.Map(func(r rune) rune {
 		switch {
 		case unicode.IsControl(r), r == utf8.RuneError:
@@ -276,14 +284,19 @@ func sanitizeFileName(name string) string {
 		}
 	}, name)
 
-	cleaned = strings.Trim(strings.TrimSpace(cleaned), ".")
+	// Trimmed again after the cut, so a second call returns the same name.
+	cleaned = trimFileName(cleaned)
+	if utf8.RuneCountInString(cleaned) > maxFileNameRunes {
+		cleaned = trimFileName(string([]rune(cleaned)[:maxFileNameRunes]))
+	}
 	if cleaned == "" {
 		return fallbackFileName
 	}
 
-	if utf8.RuneCountInString(cleaned) > maxFileNameRunes {
-		cleaned = string([]rune(cleaned)[:maxFileNameRunes])
-	}
-
 	return cleaned
+}
+
+// trimFileName drops leading and trailing spaces and dots in any order.
+func trimFileName(name string) string {
+	return strings.TrimFunc(name, func(r rune) bool { return unicode.IsSpace(r) || r == '.' })
 }

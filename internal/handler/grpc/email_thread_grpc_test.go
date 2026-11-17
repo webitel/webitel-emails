@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	kitinterceptors "github.com/webitel/webitel-go-kit/pkg/interceptors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,7 +20,9 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	emailpb "github.com/webitel/webitel-emails/api/email"
+	"github.com/webitel/webitel-emails/config"
 	"github.com/webitel/webitel-emails/infra/server/grpc/interceptors"
+	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/internal/auth"
 	handler "github.com/webitel/webitel-emails/internal/handler/grpc"
 	"github.com/webitel/webitel-emails/internal/model"
@@ -42,7 +45,132 @@ func (f fakeAuth) AuthorizeFromContext(ctx context.Context, _ string, _ auth.Acc
 
 // readStore sees thread 1 as current and assigned to user 70, thread 2 as its
 // history, and nothing else.
-type readStore struct{ store.EmailThreadReadStore }
+type readStore struct {
+	store.EmailThreadReadStore
+	sent *sendUoW
+}
+
+func (readStore) UserName(context.Context, int64, int64) (string, error) { return "Olena", nil }
+
+// LocateMessageByRequest returns the one email sendUoW accepted.
+func (s readStore) LocateMessageByRequest(_ context.Context, _, _ int64, requestID uuid.UUID) (*model.EmailMessageView, []byte, error) {
+	s.sent.mu.Lock()
+	defer s.sent.mu.Unlock()
+	if s.sent.message == nil || s.sent.message.RequestID != requestID {
+		return nil, nil, nil
+	}
+	m := s.sent.message
+	return &model.EmailMessageView{
+		ID: m.ID, ThreadID: m.ThreadID, Direction: model.EmailMessageDirectionOutbound,
+		Subject: m.Subject, DeliveryStatus: model.EmailDeliveryStatusPending,
+	}, m.RequestFingerprint, nil
+}
+
+// sendUoW accepts replies in thread 1, the current attempt 100 of user 70, and keeps
+// the last one; the writes around the message are no-ops.
+type sendUoW struct {
+	store.UnitOfWork
+	mu      sync.Mutex
+	message *model.EmailMessage
+	stores  int
+}
+
+func (u *sendUoW) WithinTransaction(ctx context.Context, fn func(context.Context, store.UnitOfWork) error) error {
+	return fn(ctx, u)
+}
+func (u *sendUoW) EmailOutboundStore() store.EmailOutboundStore { return sendOutbound{u: u} }
+func (u *sendUoW) EmailRecipientStore() store.EmailRecipientStore {
+	return noRecipients{}
+}
+func (u *sendUoW) EmailMessageAttachmentStore() store.EmailMessageAttachmentStore {
+	return noParts{}
+}
+func (u *sendUoW) EmailThreadStore() store.EmailThreadStore                 { return noThreads{} }
+func (u *sendUoW) EmailWorkspaceEventStore() store.EmailWorkspaceEventStore { return noEvents{} }
+
+type sendOutbound struct {
+	store.EmailOutboundStore
+	u *sendUoW
+}
+
+func (sendOutbound) LockRequest(context.Context, int64, int64, uuid.UUID) error { return nil }
+func (s sendOutbound) LocateRequest(_ context.Context, _, _ int64, requestID uuid.UUID) (*store.EmailOutboundRequest, error) {
+	s.u.mu.Lock()
+	defer s.u.mu.Unlock()
+	if m := s.u.message; m != nil && m.RequestID == requestID {
+		return &store.EmailOutboundRequest{MessageID: m.ID, Fingerprint: m.RequestFingerprint}, nil
+	}
+	return nil, nil
+}
+func (sendOutbound) LockReplyThread(_ context.Context, _, _, threadID int64) (*store.EmailReplyThread, error) {
+	if threadID != 1 {
+		return nil, nil
+	}
+	user, attempt, version := int64(70), int64(100), int64(0)
+	return &store.EmailReplyThread{ProfileID: 3, Subject: "Order", Status: model.EmailThreadStatusInProgress,
+		CurrentUserID: &user, CurrentAttemptID: &attempt, CurrentAttemptVersion: &version, Participant: true}, nil
+}
+func (sendOutbound) SenderProfile(context.Context, int64, int64) (*model.EmailProfile, error) {
+	return &model.EmailProfile{EmailAddress: "support@example.org", SMTPHost: "smtp.example.org", SMTPPort: 465,
+		AuthType: model.EmailAuthTypeBasic, AllowSend: true}, nil
+}
+func (sendOutbound) LockUploads(context.Context, int64, int64, []uuid.UUID) ([]*model.EmailAttachmentUpload, error) {
+	return nil, nil
+}
+func (sendOutbound) ReplyParent(context.Context, int64, int64, int64) (*store.EmailReplyParent, error) {
+	return &store.EmailReplyParent{MessageID: "parent@x"}, nil
+}
+func (s sendOutbound) CreateMessage(_ context.Context, m *model.EmailMessage) (bool, error) {
+	s.u.mu.Lock()
+	defer s.u.mu.Unlock()
+	s.u.stores++
+	m.ID = int64(50 + s.u.stores)
+	s.u.message = m
+	return true, nil
+}
+func (sendOutbound) UseUploads(context.Context, int64, []uuid.UUID, int64) error     { return nil }
+func (sendOutbound) AddAuthor(context.Context, int64, int64, int64, time.Time) error { return nil }
+
+type noRecipients struct{ store.EmailRecipientStore }
+
+func (noRecipients) CreateBulk(context.Context, int64, int64, []*model.EmailRecipient) error {
+	return nil
+}
+
+type noParts struct {
+	store.EmailMessageAttachmentStore
+}
+
+func (noParts) CreateBulk(context.Context, int64, int64, []*model.EmailMessageAttachment) error {
+	return nil
+}
+
+type noThreads struct{ store.EmailThreadStore }
+
+func (noThreads) AdvanceLastMessage(context.Context, int64, int64, int64, time.Time) error {
+	return nil
+}
+
+func (noThreads) Create(_ context.Context, t *model.EmailThread) (*model.EmailThread, error) {
+	created := *t
+	created.ID = 9
+	return &created, nil
+}
+
+// senderProfiles holds one profile a new email may come from and one it may not.
+type senderProfiles struct{ store.EmailProfileStore }
+
+func (senderProfiles) List(context.Context, int64, model.EmailProfileFilter) ([]*model.EmailProfile, bool, error) {
+	usable := model.EmailProfile{ID: 3, Name: "Support", EmailAddress: "support@example.org", SMTPHost: "smtp.example.org",
+		SMTPPort: 465, AuthType: model.EmailAuthTypeBasic, AllowSend: true, Signature: "Regards, ${agent_name}"}
+	replyOnly := usable
+	replyOnly.ID, replyOnly.AllowSend = 4, false
+	return []*model.EmailProfile{&usable, &replyOnly}, false, nil
+}
+
+type noEvents struct{}
+
+func (noEvents) Record(context.Context, store.EmailWorkspaceChange) (int, error) { return 0, nil }
 
 func (readStore) Rights(_ context.Context, domainID, userID, threadID int64) (store.EmailThreadRights, error) {
 	if domainID != 1 || userID != 70 {
@@ -121,6 +249,7 @@ func (l linker) Link(context.Context, int64, int64) (string, time.Time, error) {
 type harness struct {
 	client  emailpb.EmailThreadsClient
 	threads *threadStore
+	sent    *sendUoW
 	logs    *bytes.Buffer
 }
 
@@ -131,6 +260,7 @@ func start(t *testing.T, links linker) harness {
 	sessions := map[string]*auth.Session{
 		"reader":    {UserID: 70, DomainID: 1, Scopes: readOnly},
 		"writer":    {UserID: 70, DomainID: 1, Scopes: readWrite},
+		"creator":   {UserID: 70, DomainID: 1, Scopes: map[string]auth.Scope{"email_thread": {Access: "rx", OBAC: true}}},
 		"no-scope":  {UserID: 70, DomainID: 1, Scopes: map[string]auth.Scope{}},
 		"superread": {UserID: 99, DomainID: 1, SuperRead: true, Scopes: map[string]auth.Scope{"email_thread": {OBAC: true}}},
 	}
@@ -138,14 +268,22 @@ func start(t *testing.T, links linker) harness {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	threads := &threadStore{}
-	reads := readStore{}
+	sent := &sendUoW{}
+	reads := readStore{sent: sent}
+	readService := service.NewEmailThreadReadService(reads, links, log)
+	outboundCfg := &config.Config{Outbound: config.OutboundConfig{
+		Enabled: true, MaxAttachmentSize: 8, MaxConcurrentUploads: 1, AttachmentReferenceTTL: time.Hour,
+		MaxRecipients: 5, MaxBodySize: 1 << 10, MaxAttachments: 1, MaxAttachmentsTotalSize: 8, MaxMessageSize: 1 << 20,
+	}}
 	server := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		kitinterceptors.UnaryServerErrorInterceptor(),
 		interceptors.NewUnaryAuthInterceptor(fakeAuth{sessions: sessions}),
 	))
 	emailpb.RegisterEmailThreadsServer(server, handler.NewEmailThreadsServer(
 		service.NewEmailThreadService(threads, reads, contacts{}),
-		service.NewEmailThreadReadService(reads, links, log),
+		readService,
+		service.NewEmailAttachmentUploadService(outboundCfg, uploader{}, uploadStore{}),
+		service.NewEmailSendService(outboundCfg, sent, readService, senderProfiles{}, contacts{}),
 	))
 
 	listener := bufconn.Listen(1 << 20)
@@ -160,7 +298,7 @@ func start(t *testing.T, links linker) harness {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	return harness{client: emailpb.NewEmailThreadsClient(conn), threads: threads, logs: logs}
+	return harness{client: emailpb.NewEmailThreadsClient(conn), threads: threads, sent: sent, logs: logs}
 }
 
 func as(token string) context.Context {
@@ -182,6 +320,59 @@ func TestEmailThreadsAuthorization(t *testing.T) {
 	}
 	if _, err := h.client.BindEmailThreadContact(as("writer"), bind); err != nil || h.threads.calls != 1 {
 		t.Fatalf("bind with update: %v, store calls %d", err, h.threads.calls)
+	}
+
+	// Uploading needs read and either create or update.
+	upload := &emailpb.UploadEmailAttachmentRequest{FileName: "a.txt", Content: []byte("x")}
+	if _, err := h.client.UploadEmailAttachment(as("reader"), upload); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("upload with read only: %v", err)
+	}
+	if got, err := h.client.UploadEmailAttachment(as("writer"), upload); err != nil || got.GetReference() == "" {
+		t.Fatalf("upload with update: %v, %v", got, err)
+	}
+	upload.Content = []byte("123456789")
+	if _, err := h.client.UploadEmailAttachment(as("writer"), upload); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("upload above the limit: %v", err)
+	}
+
+	// A reply needs update; a repeated request returns the same pending message.
+	send := &emailpb.SendEmailReplyRequest{
+		ThreadId: 1, RequestId: uuid.NewString(), AttemptId: 100,
+		Message: &emailpb.InputEmailMessage{To: []*emailpb.EmailAddress{{Address: "client@x.com"}}, BodyText: "Hello"},
+	}
+	if _, err := h.client.SendEmailReply(as("reader"), send); status.Code(err) != codes.PermissionDenied || h.sent.stores != 0 {
+		t.Fatalf("send with read only: %v, stored %d", err, h.sent.stores)
+	}
+	sent, err := h.client.SendEmailReply(as("writer"), send)
+	if err != nil || sent.GetDeliveryStatus() != emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING ||
+		sent.GetSubject() != "Re: Order" || h.sent.message.ThreadID != 1 || h.sent.message.InReplyTo != "parent@x" {
+		t.Fatalf("send with update: %v, %v", sent, err)
+	}
+	again, err := h.client.SendEmailReply(as("writer"), send)
+	if err != nil || again.GetId() != sent.GetId() || again.GetDeliveryStatus() != sent.GetDeliveryStatus() || h.sent.stores != 1 {
+		t.Fatalf("replay: %v, %v, stored %d", again, err, h.sent.stores)
+	}
+
+	// A new email and its senders need create.
+	create := &emailpb.CreateEmailThreadRequest{
+		RequestId: uuid.NewString(), ProfileId: 3, ContactMode: emailpb.EmailContactMode_EMAIL_CONTACT_MODE_NONE,
+		Message: &emailpb.InputEmailMessage{To: []*emailpb.EmailAddress{{Address: "client@x.com"}}, BodyText: "Hello"},
+	}
+	if _, err := h.client.CreateEmailThread(as("reader"), create); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("create with read only: %v", err)
+	}
+	if _, err := h.client.ListEmailSenderProfiles(as("reader"), &emailpb.ListEmailSenderProfilesRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("senders with read only: %v", err)
+	}
+	created, err := h.client.CreateEmailThread(as("creator"), create)
+	if err != nil || created.GetThread().GetId() != 9 || created.GetMessage().GetThreadId() != 9 ||
+		created.GetMessage().GetDeliveryStatus() != emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING {
+		t.Fatalf("create with create: %v, %v", created, err)
+	}
+	senders, err := h.client.ListEmailSenderProfiles(as("creator"), &emailpb.ListEmailSenderProfilesRequest{})
+	if err != nil || len(senders.GetItems()) != 1 || senders.GetItems()[0].GetId() != 3 ||
+		senders.GetItems()[0].GetSignature() != "Regards, Olena" {
+		t.Fatalf("senders with create: %v, %v", senders, err)
 	}
 
 	// SuperRead passes the object class check but never the visibility boundary.
@@ -253,3 +444,15 @@ func TestEmailThreadsNeverLogLinks(t *testing.T) {
 		t.Fatalf("a link reached the log: %s", h.logs.String())
 	}
 }
+
+type uploader struct{}
+
+func (uploader) Upload(context.Context, storageinfra.UploadRequest) (storageinfra.UploadResult, error) {
+	return storageinfra.UploadResult{FileID: 1, Size: 1}, nil
+}
+
+type uploadStore struct{}
+
+func (uploadStore) Create(context.Context, *model.EmailAttachmentUpload) error { return nil }
+
+func (uploadStore) DeleteExpiredUnused(context.Context, time.Time, int) (int64, error) { return 0, nil }

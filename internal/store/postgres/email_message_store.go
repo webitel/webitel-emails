@@ -187,7 +187,7 @@ func (s *emailMessageStore) LastReceivedAt(ctx context.Context, domainID, profil
 	const query = `
 SELECT max(m.received_at)
 FROM email.message m
-WHERE m.domain_id = $1 AND m.profile_id = $2 AND m.state = 'ready'`
+WHERE m.domain_id = $1 AND m.profile_id = $2 AND m.state = 'ready' AND m.direction = 'inbound'`
 
 	var received sql.NullTime
 	if err := s.db.QueryRow(ctx, query, domainID, profileID).Scan(&received); err != nil {

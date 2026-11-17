@@ -6,6 +6,7 @@ import (
 	"github.com/webitel/webitel-emails/config"
 	"github.com/webitel/webitel-emails/infra"
 	"github.com/webitel/webitel-emails/infra/logging"
+	"github.com/webitel/webitel-emails/internal/delivery"
 	"github.com/webitel/webitel-emails/internal/distribution"
 	grpchandler "github.com/webitel/webitel-emails/internal/handler/grpc"
 	"github.com/webitel/webitel-emails/internal/inbound"
@@ -33,6 +34,7 @@ func modules(cfg *config.Config) fx.Option {
 		inbound.Module,
 		outbox.Module,
 		polling.Module,
+		delivery.Module,
 		projection.Module,
 	)
 }

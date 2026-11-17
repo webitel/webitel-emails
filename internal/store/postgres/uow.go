@@ -77,6 +77,11 @@ func (u *unitOfWork) EmailWorkspaceEventStore() store.EmailWorkspaceEventStore {
 	return NewEmailWorkspaceEventStore(u.querier, u.workspaceEvents)
 }
 
+// EmailOutboundStore returns the outbound store bound to the current querier.
+func (u *unitOfWork) EmailOutboundStore() store.EmailOutboundStore {
+	return NewEmailOutboundStore(u.querier)
+}
+
 // EnsureEmailProfileAssignment checks the fencing token without locking the row.
 func (u *unitOfWork) EnsureEmailProfileAssignment(
 	ctx context.Context,

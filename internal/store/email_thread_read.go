@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
@@ -33,6 +35,11 @@ type EmailThreadReadStore interface {
 	// LocateMessage returns one ready message of a Thread the user may see; nil
 	// means none.
 	LocateMessage(ctx context.Context, domainID, userID, threadID, messageID int64) (*model.EmailMessageView, error)
+	// UserName returns the display name of a user of the domain, empty when none.
+	UserName(ctx context.Context, domainID, userID int64) (string, error)
+	// LocateMessageByRequest returns the outbound message of an author's request and
+	// its fingerprint, without the visibility boundary; nil means none.
+	LocateMessageByRequest(ctx context.Context, domainID, authorID int64, requestID uuid.UUID) (*model.EmailMessageView, []byte, error)
 	// LocateAttachment returns one part of a ready message of a Thread the user
 	// may see, with the file id it is stored under; nil means none.
 	LocateAttachment(

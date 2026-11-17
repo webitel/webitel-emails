@@ -5,6 +5,7 @@ import (
 
 	"github.com/webitel/webitel-emails/config"
 	contactsinfra "github.com/webitel/webitel-emails/infra/contacts"
+	"github.com/webitel/webitel-emails/infra/leader"
 	storageinfra "github.com/webitel/webitel-emails/infra/storage"
 	"github.com/webitel/webitel-emails/internal/store"
 )
@@ -22,5 +23,13 @@ var Module = fx.Module(
 			return NewStorageAttachmentLinks(client, cfg.Storage)
 		},
 		NewEmailThreadReadService,
+		func(client *storageinfra.Client) AttachmentUploader { return client },
+		NewEmailAttachmentUploadService,
+		NewEmailSendService,
+		fx.Annotate(
+			NewAttachmentUploadCleanup,
+			fx.As(new(leader.Task)),
+			fx.ResultTags(leader.TaskGroup),
+		),
 	),
 )

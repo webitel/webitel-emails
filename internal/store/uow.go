@@ -40,4 +40,6 @@ type UnitOfWork interface {
 	OutboxStore() OutboxStore
 	// EmailWorkspaceEventStore records Workspace changes; only inside WithinTransaction.
 	EmailWorkspaceEventStore() EmailWorkspaceEventStore
+	// EmailOutboundStore accepts outbound emails; only inside WithinTransaction.
+	EmailOutboundStore() EmailOutboundStore
 }

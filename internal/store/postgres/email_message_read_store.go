@@ -2,24 +2,34 @@ package postgres
 
 import (
 	"context"
+	stderrors "errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/webitel/webitel-emails/internal/model"
 )
 
-// emailMessageViewSelect reads ready messages joined to their Thread; the caller
-// appends conditions after the visibility boundary, which is always present.
-var emailMessageViewSelect = `
+// emailMessageViewBase reads ready messages joined to their Thread, without the
+// visibility boundary.
+const emailMessageViewBase = `
 SELECT m.id, m.thread_id, m.profile_id, m.direction, m.kind, m.message_id,
     coalesce(m.in_reply_to, '') AS in_reply_to, m.subject, m.body_text, m.body_html,
     m.bounce_original_message_id, m.bounce_recipient, m.bounce_status, m.bounce_diagnostic_code,
-    m.sent_at, m.received_at
+    m.sent_at, m.received_at, m.delivery_status, m.request_fingerprint,
+    m.author_user_id, coalesce(nullif(au.name, ''), au.username::text, '') AS author_name,
+    m.delivery_error_code, m.delivered_at
 FROM email.message m
 JOIN email.thread t ON t.domain_id = m.domain_id AND t.id = m.thread_id
-WHERE m.domain_id = @domain_id AND m.thread_id = @thread_id AND m.state = 'ready'
-    AND ` + visibleThread(model.EmailThreadAssignmentAll)
+LEFT JOIN directory.wbt_user au ON au.dc = m.domain_id AND au.id = m.author_user_id
+WHERE m.domain_id = @domain_id AND m.state = 'ready'`
+
+// emailMessageViewSelect reads the messages of one Thread; the caller appends
+// conditions after the visibility boundary, which is always present.
+var emailMessageViewSelect = emailMessageViewBase + ` AND m.thread_id = @thread_id
+    AND ` + visibleThread(model.EmailThreadAssignmentAll) + `
+    AND ` + messageReadable
 
 // ListMessages pages by (received_at, id): pages never repeat a message, but one
 // completed later with an earlier time is not added to a traversal in progress.
@@ -57,7 +67,7 @@ func (s *emailThreadReadStore) ListMessages(
 	if next {
 		messages = messages[:filter.Size]
 	}
-	if err := s.attachDetails(ctx, filter.DomainID, messages); err != nil {
+	if err := s.attachDetails(ctx, filter.DomainID, filter.UserID, messages); err != nil {
 		return nil, false, err
 	}
 
@@ -78,11 +88,49 @@ func (s *emailThreadReadStore) LocateMessage(
 	if err != nil || len(messages) == 0 {
 		return nil, err
 	}
-	if err := s.attachDetails(ctx, domainID, messages); err != nil {
+	if err := s.attachDetails(ctx, domainID, userID, messages); err != nil {
 		return nil, err
 	}
 
 	return messages[0], nil
+}
+
+// UserName reads the name the read API shows for a user.
+func (s *emailThreadReadStore) UserName(ctx context.Context, domainID, userID int64) (string, error) {
+	var name string
+	err := s.db.QueryRow(ctx, `
+SELECT coalesce(nullif(u.name, ''), u.username::text, '') FROM directory.wbt_user u
+WHERE u.dc = $1 AND u.id = $2`, domainID, userID).Scan(&name)
+	if err != nil && !stderrors.Is(err, pgx.ErrNoRows) {
+		return "", ParseError(err)
+	}
+
+	return name, nil
+}
+
+// LocateMessageByRequest reads the outbound message of an author's request with
+// its fingerprint. It skips the visibility boundary: a replay returns the result
+// whatever happened to the Thread since.
+func (s *emailThreadReadStore) LocateMessageByRequest(
+	ctx context.Context,
+	domainID, authorID int64,
+	requestID uuid.UUID,
+) (*model.EmailMessageView, []byte, error) {
+	records, err := s.queryRecords(ctx, emailMessageViewBase+`
+    AND m.author_user_id = @author_id AND m.request_id = @request_id`, pgx.NamedArgs{
+		"domain_id":  domainID,
+		"author_id":  authorID,
+		"request_id": requestID,
+	})
+	if err != nil || len(records) == 0 {
+		return nil, nil, err
+	}
+	message := records[0].toModel()
+	if err := s.attachDetails(ctx, domainID, authorID, []*model.EmailMessageView{message}); err != nil {
+		return nil, nil, err
+	}
+
+	return message, records[0].RequestFingerprint, nil
 }
 
 func (s *emailThreadReadStore) queryMessages(
@@ -90,13 +138,9 @@ func (s *emailThreadReadStore) queryMessages(
 	query string,
 	args pgx.NamedArgs,
 ) ([]*model.EmailMessageView, error) {
-	rows, err := s.db.Query(ctx, query, args)
+	records, err := s.queryRecords(ctx, query, args)
 	if err != nil {
-		return nil, ParseError(err)
-	}
-	records, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[emailMessageViewRecord])
-	if err != nil {
-		return nil, ParseError(err)
+		return nil, err
 	}
 
 	out := make([]*model.EmailMessageView, 0, len(records))
@@ -107,9 +151,30 @@ func (s *emailThreadReadStore) queryMessages(
 	return out, nil
 }
 
-// attachDetails loads recipients (never blind copies) and parts of a visible page,
-// one query each.
-func (s *emailThreadReadStore) attachDetails(ctx context.Context, domainID int64, messages []*model.EmailMessageView) error {
+func (s *emailThreadReadStore) queryRecords(
+	ctx context.Context,
+	query string,
+	args pgx.NamedArgs,
+) ([]*emailMessageViewRecord, error) {
+	rows, err := s.db.Query(ctx, query, args)
+	if err != nil {
+		return nil, ParseError(err)
+	}
+	records, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[emailMessageViewRecord])
+	if err != nil {
+		return nil, ParseError(err)
+	}
+
+	return records, nil
+}
+
+// attachDetails loads recipients and parts of a visible page, one query each. Blind
+// copies are shown only to the author of an outbound email.
+func (s *emailThreadReadStore) attachDetails(
+	ctx context.Context,
+	domainID, userID int64,
+	messages []*model.EmailMessageView,
+) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -122,10 +187,12 @@ func (s *emailThreadReadStore) attachDetails(ctx context.Context, domainID int64
 	}
 
 	rows, err := s.db.Query(ctx, `
-SELECT message_id, type, address, display_name
-FROM email.recipient
-WHERE domain_id = $1 AND message_id = ANY($2) AND type <> 'bcc'
-ORDER BY message_id, type, ordinal`, domainID, ids)
+SELECT r.message_id, r.type, r.address, r.display_name
+FROM email.recipient r
+JOIN email.message m ON m.domain_id = r.domain_id AND m.id = r.message_id
+WHERE r.domain_id = $1 AND r.message_id = ANY($2)
+    AND (r.type <> 'bcc' OR (m.direction = 'outbound' AND m.author_user_id = $3))
+ORDER BY r.message_id, r.type, r.ordinal`, domainID, ids, userID)
 	if err != nil {
 		return ParseError(err)
 	}
@@ -147,6 +214,8 @@ ORDER BY message_id, type, ordinal`, domainID, ids)
 			message.To = append(message.To, address)
 		case model.EmailRecipientTypeCc:
 			message.Cc = append(message.Cc, address)
+		case model.EmailRecipientTypeBcc:
+			message.Bcc = append(message.Bcc, address)
 		}
 	}
 
@@ -198,6 +267,12 @@ type emailMessageViewRecord struct {
 	BounceDiagnosticCode    *string    `db:"bounce_diagnostic_code"`
 	SentAt                  *time.Time `db:"sent_at"`
 	ReceivedAt              time.Time  `db:"received_at"`
+	DeliveryStatus          *string    `db:"delivery_status"`
+	RequestFingerprint      []byte     `db:"request_fingerprint"`
+	AuthorUserID            *int64     `db:"author_user_id"`
+	AuthorName              string     `db:"author_name"`
+	DeliveryErrorCode       *string    `db:"delivery_error_code"`
+	DeliveredAt             *time.Time `db:"delivered_at"`
 }
 
 func (r *emailMessageViewRecord) toModel() *model.EmailMessageView {
@@ -214,6 +289,12 @@ func (r *emailMessageViewRecord) toModel() *model.EmailMessageView {
 		ReceivedAt:        r.ReceivedAt,
 		BodyText:          r.BodyText,
 		RawHTML:           r.BodyHTML,
+		DeliveryStatus:    model.EmailDeliveryStatus(derefString(r.DeliveryStatus)),
+		DeliveryErrorCode: model.EmailDeliveryError(derefString(r.DeliveryErrorCode)),
+		DeliveredAt:       r.DeliveredAt,
+	}
+	if r.AuthorUserID != nil {
+		view.Author = &model.Lookup{ID: *r.AuthorUserID, Name: r.AuthorName}
 	}
 	if view.Kind == model.EmailKindBounce {
 		view.Bounce = &model.EmailBounceInfo{
@@ -261,7 +342,8 @@ JOIN email.message m ON m.domain_id = a.domain_id AND m.id = a.message_id
 JOIN email.thread t ON t.domain_id = m.domain_id AND t.id = m.thread_id
 WHERE a.domain_id = @domain_id AND a.id = @attachment_id AND m.id = @message_id
     AND m.thread_id = @thread_id AND m.state = 'ready'
-    AND ` + visibleThread(model.EmailThreadAssignmentAll)
+    AND ` + visibleThread(model.EmailThreadAssignmentAll) + `
+    AND ` + messageReadable
 
 	rows, err := s.db.Query(ctx, query, pgx.NamedArgs{
 		"domain_id":     domainID,

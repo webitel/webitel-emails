@@ -81,33 +81,11 @@ func (c *smtpClient) Test(ctx context.Context, connection SMTPConnection) error 
 	}
 	defer rawConnection.Close()
 
-	var smtpConnection net.Conn = rawConnection
-	switch connection.Security {
-	case model.EmailConnectionSecurityTLS:
-		tlsConnection := tls.Client(rawConnection, tlsConfig)
-		if err := tlsConnection.HandshakeContext(ctx); err != nil {
-			return fmt.Errorf("smtp: TLS handshake: %w", err)
-		}
-		smtpConnection = tlsConnection
-	case model.EmailConnectionSecurityStartTLS:
-	default:
-		return fmt.Errorf("smtp: unsupported connection security %q", connection.Security)
-	}
-
-	client, err := smtp.NewClient(smtpConnection, connection.Host)
+	client, err := startSMTP(ctx, rawConnection, connection, tlsConfig, false)
 	if err != nil {
-		return fmt.Errorf("smtp: initialize client: %w", err)
+		return err
 	}
 	defer client.Close()
-
-	if connection.Security == model.EmailConnectionSecurityStartTLS {
-		if supported, _ := client.Extension("STARTTLS"); !supported {
-			return ErrSMTPStartTLSNotSupported
-		}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return fmt.Errorf("smtp: start TLS: %w", err)
-		}
-	}
 
 	auth, err := smtpAuth(client, connection)
 	if err != nil {
@@ -121,6 +99,53 @@ func (c *smtpClient) Test(ctx context.Context, connection SMTPConnection) error 
 	}
 
 	return nil
+}
+
+// startSMTP greets the server over conn and secures the session as the profile requires.
+// greet checks EHLO/HELO at once; otherwise net/smtp hides a refused greeting as a
+// missing extension.
+func startSMTP(
+	ctx context.Context,
+	conn net.Conn,
+	connection SMTPConnection,
+	tlsConfig *tls.Config,
+	greet bool,
+) (*smtp.Client, error) {
+	switch connection.Security {
+	case model.EmailConnectionSecurityTLS:
+		tlsConnection := tls.Client(conn, tlsConfig)
+		if err := tlsConnection.HandshakeContext(ctx); err != nil {
+			return nil, fmt.Errorf("smtp: TLS handshake: %w", err)
+		}
+		conn = tlsConnection
+	case model.EmailConnectionSecurityStartTLS:
+	default:
+		return nil, fmt.Errorf("smtp: unsupported connection security %q", connection.Security)
+	}
+
+	client, err := smtp.NewClient(conn, connection.Host)
+	if err != nil {
+		return nil, fmt.Errorf("smtp: initialize client: %w", err)
+	}
+	if greet {
+		if err := client.Hello("localhost"); err != nil {
+			client.Close()
+			return nil, fmt.Errorf("smtp: greeting: %w", err)
+		}
+	}
+
+	if connection.Security == model.EmailConnectionSecurityStartTLS {
+		if supported, _ := client.Extension("STARTTLS"); !supported {
+			client.Close()
+			return nil, ErrSMTPStartTLSNotSupported
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			client.Close()
+			return nil, fmt.Errorf("smtp: start TLS: %w", err)
+		}
+	}
+
+	return client, nil
 }
 
 func smtpAuth(client *smtp.Client, connection SMTPConnection) (smtp.Auth, error) {

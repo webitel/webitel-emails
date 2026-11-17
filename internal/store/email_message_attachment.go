@@ -10,7 +10,8 @@ import (
 // every MIME part of the email, including the ones deliberately skipped.
 type EmailMessageAttachmentStore interface {
 	// CreateBulk writes the whole manifest of one message in a single statement.
-	// Parts are never added later, so this runs once per message.
+	// Parts are never added later, so this runs once per message. FileID is written
+	// as is: nil for a part not uploaded yet.
 	CreateBulk(ctx context.Context, domainID, messageID int64, attachments []*model.EmailMessageAttachment) error
 	// List returns the manifest of a message ordered by MIME position.
 	List(ctx context.Context, domainID, messageID int64) ([]*model.EmailMessageAttachment, error)

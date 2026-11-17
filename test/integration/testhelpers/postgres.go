@@ -163,7 +163,7 @@ ALTER TABLE directory.wbt_user ADD COLUMN IF NOT EXISTS dc bigint NOT NULL DEFAU
 func Reset(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 
-	const query = `DELETE FROM email.outbox; DELETE FROM email.inbound_failure; DELETE FROM email.thread; DELETE FROM email.profile;`
+	const query = `DELETE FROM email.attachment_upload; DELETE FROM email.outbox; DELETE FROM email.inbound_failure; DELETE FROM email.thread; DELETE FROM email.profile;`
 	if _, err := db.Exec(context.Background(), query); err != nil {
 		t.Fatalf("reset database: %v", err)
 	}

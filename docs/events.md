@@ -139,7 +139,7 @@ documentation, waits for confirmation by Workspace.
 |---|---|---|
 | `email.workspace.thread.changed` | `email.workspace.thread.changed.v1.<domain_id>.<user_id>` | An applied projection, a new action or participant, a contact change |
 | `email.workspace.message.created` | `email.workspace.message.created.v1.<domain_id>.<user_id>` | A Message of a regular Thread became `ready`; a contact resolved with it comes with this event |
-| `email.workspace.message.delivery` | `email.workspace.message.delivery.v1.<domain_id>.<user_id>` | Reserved for the SMTP status of an outbound Message (stage 17.7); not sent yet |
+| `email.workspace.message.delivery` | `email.workspace.message.delivery.v1.<domain_id>.<user_id>` | An outbound Message got its final SMTP result (`sent` or `failed`), from its worker or from recovery; the status is read through the read API |
 
 All go to `email.events` (topic) as `application/json`, persistent, with confirms
 and the headers `x-event-id`, `x-event-type` and `x-schema-version`, and
@@ -361,8 +361,9 @@ are only added, their versions and times only widen, so the order and repetition
 of deliveries do not matter. `waiting`, `offering` and the marker never add a
 row, so an offer that was not taken gives no history. Only a participant or the
 current agent of a Thread may read it through the read API; `last_handled_*` is
-history, not access. Authors of outbound emails will join the journal with
-outbound email support.
+history, not access. The author of a new outbound Thread joins the journal when
+the Thread is created, with `outbound_at` set and no agent until a snapshot
+proves a Take.
 
 ### Action journal
 

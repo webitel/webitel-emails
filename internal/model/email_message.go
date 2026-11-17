@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // EmailMessageDirection tells an incoming email from an outgoing one.
 type EmailMessageDirection string
@@ -20,6 +24,33 @@ const (
 	EmailMessageStateProcessing EmailMessageState = "processing"
 	EmailMessageStateReady      EmailMessageState = "ready"
 	EmailMessageStateFailed     EmailMessageState = "failed"
+)
+
+// EmailDeliveryStatus is the SMTP delivery of an outbound message.
+type EmailDeliveryStatus string
+
+// Delivery statuses of an outbound message.
+const (
+	EmailDeliveryStatusPending EmailDeliveryStatus = "pending"
+	EmailDeliveryStatusSent    EmailDeliveryStatus = "sent"
+	EmailDeliveryStatusFailed  EmailDeliveryStatus = "failed"
+)
+
+// EmailDeliveryError is why an outbound message failed.
+type EmailDeliveryError string
+
+// Delivery failure codes; interrupted and unknown_result tell whether the server may
+// have accepted the email.
+const (
+	EmailDeliveryErrorAuth               EmailDeliveryError = "auth"
+	EmailDeliveryErrorRecipientRejected  EmailDeliveryError = "recipient_rejected"
+	EmailDeliveryErrorMessageTooLarge    EmailDeliveryError = "message_too_large"
+	EmailDeliveryErrorConnection         EmailDeliveryError = "connection"
+	EmailDeliveryErrorProfileUnavailable EmailDeliveryError = "profile_unavailable"
+	EmailDeliveryErrorRejected           EmailDeliveryError = "rejected"
+	EmailDeliveryErrorTemporaryFailure   EmailDeliveryError = "temporary_failure"
+	EmailDeliveryErrorInterrupted        EmailDeliveryError = "interrupted"
+	EmailDeliveryErrorUnknownResult      EmailDeliveryError = "unknown_result"
 )
 
 // EmailRecipientType is the header an address was taken from.
@@ -73,6 +104,13 @@ type EmailMessage struct {
 	SentAt *time.Time
 	// ReceivedAt comes from IMAP INTERNALDATE and orders the Thread.
 	ReceivedAt time.Time
+
+	// Outbound only: the author, the idempotency key with the fingerprint of the
+	// request, and the delivery.
+	AuthorUserID       int64
+	RequestID          uuid.UUID
+	RequestFingerprint []byte
+	DeliveryStatus     EmailDeliveryStatus
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

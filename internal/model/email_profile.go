@@ -54,6 +54,8 @@ type EmailProfile struct {
 	SenderName   string
 	ReplyTo      string
 	Signature    string
+	// AllowSend lets operators start new emails from this profile.
+	AllowSend bool
 
 	IMAPHost             string
 	IMAPPort             int32

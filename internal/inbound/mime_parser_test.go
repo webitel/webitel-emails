@@ -309,6 +309,12 @@ func TestMIMEParserClassifiesMessages(t *testing.T) {
 			kind: model.EmailKindAutoReply,
 		},
 		{
+			name: "ordinary reply asking not to auto-reply",
+			raw: "From: hidden@example.org\r\nTo: support@example.org\r\nIn-Reply-To: <sent@example.org>\r\n" +
+				"X-Auto-Response-Suppress: All\r\n\r\nThanks, see you tomorrow",
+			kind: model.EmailKindRegular,
+		},
+		{
 			name: "bulk newsletter",
 			raw:  "From: news@example.org\r\nPrecedence: bulk\r\nList-Id: news.example.org\r\n\r\nNewsletter",
 			kind: model.EmailKindRegular,

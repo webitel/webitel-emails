@@ -229,6 +229,50 @@ var WebitelAPI = WebitelServicesInfo{
 					},
 				},
 			},
+			"SendEmailReply": WebitelMethod{
+				Access: 2,
+				Input:  "SendEmailReplyRequest",
+				Output: "EmailMessage",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages",
+						Method: "POST",
+					},
+				},
+			},
+			"CreateEmailThread": WebitelMethod{
+				Access: 0,
+				Input:  "CreateEmailThreadRequest",
+				Output: "CreateEmailThreadResponse",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads",
+						Method: "POST",
+					},
+				},
+			},
+			"ListEmailSenderProfiles": WebitelMethod{
+				Access: 0,
+				Input:  "ListEmailSenderProfilesRequest",
+				Output: "EmailSenderProfileList",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/sender_profiles",
+						Method: "GET",
+					},
+				},
+			},
+			"UploadEmailAttachment": WebitelMethod{
+				Access: 1,
+				Input:  "UploadEmailAttachmentRequest",
+				Output: "EmailAttachmentUpload",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/attachments",
+						Method: "POST",
+					},
+				},
+			},
 		},
 	},
 }

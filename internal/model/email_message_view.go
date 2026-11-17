@@ -69,6 +69,12 @@ type EmailMessageView struct {
 	SentAt     *time.Time
 	ReceivedAt time.Time
 	BodyText   string
+	// Outbound only: the author, Bcc (for the author alone) and the delivery.
+	Author            *Lookup
+	Bcc               []EmailAddress
+	DeliveryStatus    EmailDeliveryStatus
+	DeliveryErrorCode EmailDeliveryError
+	DeliveredAt       *time.Time
 
 	// RawHTML is the stored body exactly as the sender wrote it. It never
 	// leaves the service; only SanitizedHTML is returned to a client.

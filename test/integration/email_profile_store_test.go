@@ -149,3 +149,46 @@ func TestEmailProfileStoreSearchAndFields(t *testing.T) {
 		}
 	})
 }
+
+func TestEmailProfileAllowSend(t *testing.T) {
+	db := testhelpers.Database(t)
+	testhelpers.Reset(t, db)
+	ctx := context.Background()
+	profiles := storepostgres.NewEmailProfileStore(db)
+
+	profile := &model.EmailProfile{
+		Name: "outbound", EmailAddress: "box@example.org", Username: "box",
+		IMAPHost: "imap.example.org", IMAPPort: 993, IMAPSecurity: model.EmailConnectionSecurityTLS,
+		SMTPHost: "smtp.example.org", SMTPPort: 465, SMTPSecurity: model.EmailConnectionSecurityTLS,
+		AuthType: model.EmailAuthTypeBasic, AllowSend: true,
+	}
+	profile.ApplyDefaults()
+	created, err := profiles.Create(ctx, store.CreateEmailProfileParams{DomainID: 1, Profile: profile, Password: []byte("sealed")})
+	if err != nil || !created.AllowSend {
+		t.Fatalf("create with allow_send = %+v, %v", created, err)
+	}
+
+	update := func(t *testing.T, allowSend *bool) bool {
+		t.Helper()
+		changed := *profile
+		changed.AllowSend = false // the value of an old client that does not know the field
+		updated, err := profiles.Update(ctx, store.UpdateEmailProfileParams{
+			DomainID: 1, ID: created.ID, Profile: &changed, AllowSend: allowSend,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return updated.AllowSend
+	}
+
+	if !update(t, nil) {
+		t.Fatal("update without allow_send cleared it")
+	}
+	off := false
+	if update(t, &off) {
+		t.Fatal("explicit false did not clear allow_send")
+	}
+	if update(t, nil) {
+		t.Fatal("update without allow_send changed it")
+	}
+}

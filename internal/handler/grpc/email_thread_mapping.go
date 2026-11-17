@@ -98,6 +98,7 @@ func emailThreadToProto(view *model.EmailThreadView) *emailpb.EmailThread {
 		CurrentAttemptVersion:  int64Value(view.CurrentAttemptVersion),
 		ProjectionVersion:      int64Value(view.ProjectionVersion),
 		WorkspaceVersion:       view.WorkspaceVersion,
+		ReplySignature:         view.ReplySignature,
 	}
 	if preview := view.Preview; preview != nil {
 		out.Preview = &emailpb.EmailThreadPreview{
@@ -198,6 +199,12 @@ func emailMessageToProto(message *model.EmailMessageView) *emailpb.EmailMessage 
 		BodyHtml:             message.SanitizedHTML,
 		RemoteContentBlocked: message.RemoteContentBlocked,
 		InlineContentStatus:  inlineContentToProto[message.InlineContentStatus],
+		DeliveryStatus:       deliveryStatusToProto[message.DeliveryStatus],
+		Author:               lookupToProto(message.Author),
+		Bcc:                  addressesToProto(message.Bcc),
+		DeliveryErrorCode:    deliveryErrors[message.DeliveryErrorCode].code,
+		DeliveryError:        deliveryErrors[message.DeliveryErrorCode].text,
+		DeliveredAt:          unixMilliValue(message.DeliveredAt),
 	}
 	if bounce := message.Bounce; bounce != nil {
 		out.Bounce = &emailpb.EmailBounce{
@@ -221,6 +228,55 @@ func emailMessageToProto(message *model.EmailMessageView) *emailpb.EmailMessage 
 			attachment.ContentId = part.ContentID
 		}
 		out.Attachments = append(out.Attachments, attachment)
+	}
+
+	return out
+}
+
+var deliveryStatusToProto = map[model.EmailDeliveryStatus]emailpb.EmailDeliveryStatus{
+	model.EmailDeliveryStatusPending: emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING,
+	model.EmailDeliveryStatusSent:    emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_SENT,
+	model.EmailDeliveryStatusFailed:  emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_FAILED,
+}
+
+var contactModeFromProto = map[emailpb.EmailContactMode]service.ContactMode{
+	emailpb.EmailContactMode_EMAIL_CONTACT_MODE_LINK: service.ContactModeLink,
+	emailpb.EmailContactMode_EMAIL_CONTACT_MODE_NONE: service.ContactModeNone,
+}
+
+// deliveryErrors gives each failure code its short text; Workspace localizes by the
+// code, and the reply of the SMTP server is never shown.
+var deliveryErrors = map[model.EmailDeliveryError]struct {
+	code emailpb.EmailDeliveryError
+	text string
+}{
+	model.EmailDeliveryErrorAuth:               {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_AUTH, "The mail server did not accept the profile credentials."},
+	model.EmailDeliveryErrorRecipientRejected:  {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_RECIPIENT_REJECTED, "The mail server rejected a recipient."},
+	model.EmailDeliveryErrorMessageTooLarge:    {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_MESSAGE_TOO_LARGE, "The email is larger than the mail server accepts."},
+	model.EmailDeliveryErrorConnection:         {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_CONNECTION, "The mail server could not be reached."},
+	model.EmailDeliveryErrorProfileUnavailable: {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_PROFILE_UNAVAILABLE, "The email profile cannot send email; check its settings."},
+	model.EmailDeliveryErrorRejected:           {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_REJECTED, "The mail server rejected the email."},
+	model.EmailDeliveryErrorTemporaryFailure:   {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_TEMPORARY_FAILURE, "The mail server temporarily refused the email."},
+	model.EmailDeliveryErrorInterrupted:        {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_INTERRUPTED, "Sending stopped before the mail server accepted the email."},
+	model.EmailDeliveryErrorUnknownResult:      {emailpb.EmailDeliveryError_EMAIL_DELIVERY_ERROR_UNKNOWN_RESULT, "The result is unknown: the mail server may have accepted the email."},
+}
+
+func outboundMessageFromProto(m *emailpb.InputEmailMessage) service.OutboundMessageInput {
+	return service.OutboundMessageInput{
+		To:                   addressesFromProto(m.GetTo()),
+		Cc:                   addressesFromProto(m.GetCc()),
+		Bcc:                  addressesFromProto(m.GetBcc()),
+		Subject:              m.GetSubject(),
+		HTMLBody:             m.GetBodyHtml(),
+		TextBody:             m.GetBodyText(),
+		AttachmentReferences: m.GetAttachmentReferences(),
+	}
+}
+
+func addressesFromProto(addresses []*emailpb.EmailAddress) []model.EmailAddress {
+	out := make([]model.EmailAddress, 0, len(addresses))
+	for _, a := range addresses {
+		out = append(out, model.EmailAddress{Address: a.GetAddress(), Name: a.GetName()})
 	}
 
 	return out

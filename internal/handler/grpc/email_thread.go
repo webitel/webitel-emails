@@ -17,6 +17,8 @@ type EmailThreadsServer struct {
 
 	service *service.EmailThreadService
 	reads   *service.EmailThreadReadService
+	uploads *service.EmailAttachmentUploadService
+	sends   *service.EmailSendService
 }
 
 var _ emailpb.EmailThreadsServer = (*EmailThreadsServer)(nil)
@@ -25,8 +27,118 @@ var _ emailpb.EmailThreadsServer = (*EmailThreadsServer)(nil)
 func NewEmailThreadsServer(
 	threadService *service.EmailThreadService,
 	readService *service.EmailThreadReadService,
+	uploadService *service.EmailAttachmentUploadService,
+	sendService *service.EmailSendService,
 ) *EmailThreadsServer {
-	return &EmailThreadsServer{service: threadService, reads: readService}
+	return &EmailThreadsServer{service: threadService, reads: readService, uploads: uploadService, sends: sendService}
+}
+
+// CreateEmailThread starts a Thread with an outbound email of the caller.
+func (s *EmailThreadsServer) CreateEmailThread(
+	ctx context.Context,
+	req *emailpb.CreateEmailThreadRequest,
+) (*emailpb.CreateEmailThreadResponse, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	thread, message, err := s.sends.CreateThread(ctx, session, service.CreateThreadInput{
+		RequestID:   req.GetRequestId(),
+		ProfileID:   req.GetProfileId(),
+		ContactMode: contactModeFromProto[req.GetContactMode()],
+		ContactID:   req.GetContactId(),
+		Message:     outboundMessageFromProto(req.GetMessage()),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// A Thread the caller no longer sees is told by its id only.
+	out := &emailpb.CreateEmailThreadResponse{Thread: &emailpb.EmailThread{Id: message.ThreadID}, Message: emailMessageToProto(message)}
+	if thread != nil {
+		out.Thread = emailThreadToProto(thread)
+	}
+
+	return out, nil
+}
+
+// ListEmailSenderProfiles returns the profiles a new email may be sent from.
+func (s *EmailThreadsServer) ListEmailSenderProfiles(
+	ctx context.Context,
+	_ *emailpb.ListEmailSenderProfilesRequest,
+) (*emailpb.EmailSenderProfileList, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	profiles, err := s.sends.ListSenderProfiles(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*emailpb.EmailSenderProfile, 0, len(profiles))
+	for _, p := range profiles {
+		items = append(items, &emailpb.EmailSenderProfile{
+			Id: p.ID, Name: p.Name, EmailAddress: p.EmailAddress, SenderName: p.SenderName, Signature: p.Signature,
+		})
+	}
+
+	return &emailpb.EmailSenderProfileList{Items: items}, nil
+}
+
+// SendEmailReply queues a reply of the caller in a Thread.
+func (s *EmailThreadsServer) SendEmailReply(
+	ctx context.Context,
+	req *emailpb.SendEmailReplyRequest,
+) (*emailpb.EmailMessage, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	message, err := s.sends.SendReply(ctx, session, service.ReplyInput{
+		ThreadID:               req.GetThreadId(),
+		RequestID:              req.GetRequestId(),
+		AttemptID:              req.GetAttemptId(),
+		ExpectedAttemptVersion: req.GetExpectedAttemptVersion(),
+		InReplyToMessageID:     req.GetInReplyToMessageId(),
+		Message:                outboundMessageFromProto(req.GetMessage()),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return emailMessageToProto(message), nil
+}
+
+// UploadEmailAttachment stores a file for an outbound email of the caller.
+func (s *EmailThreadsServer) UploadEmailAttachment(
+	ctx context.Context,
+	req *emailpb.UploadEmailAttachmentRequest,
+) (*emailpb.EmailAttachmentUpload, error) {
+	session, err := emailThreadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	upload, err := s.uploads.Upload(ctx, session, service.UploadAttachmentInput{
+		FileName: req.GetFileName(),
+		MimeType: req.GetMimeType(),
+		Content:  req.GetContent(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &emailpb.EmailAttachmentUpload{
+		Reference: upload.Reference.String(),
+		FileName:  upload.FileName,
+		MimeType:  upload.MimeType,
+		Size:      upload.Size,
+		ExpiresAt: upload.ExpiresAt.UnixMilli(),
+	}, nil
 }
 
 // ListEmailThreads returns one page of the caller's Threads.

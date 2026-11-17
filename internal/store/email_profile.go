@@ -36,6 +36,8 @@ type UpdateEmailProfileParams struct {
 	Profile           *model.EmailProfile
 	Password          []byte
 	OAuthClientSecret []byte
+	// AllowSend nil keeps the stored value.
+	AllowSend *bool
 }
 
 // EmailProfileOAuthCredentials contains encrypted OAuth values loaded only for

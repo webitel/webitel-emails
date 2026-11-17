@@ -74,6 +74,8 @@ type UpdateEmailProfileInput struct {
 	Profile           *model.EmailProfile
 	Password          string
 	OAuthClientSecret string
+	// AllowSend nil keeps the stored value.
+	AllowSend *bool
 }
 
 // Create stores an Email Profile within a domain.
@@ -135,6 +137,7 @@ func (s *EmailProfileService) Update(ctx context.Context, input UpdateEmailProfi
 		Profile:           profile,
 		Password:          sealedPassword,
 		OAuthClientSecret: sealedOAuthClientSecret,
+		AllowSend:         input.AllowSend,
 	})
 	if err != nil {
 		return nil, err
