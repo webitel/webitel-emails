@@ -2,6 +2,7 @@ package mail
 
 import (
 	"context"
+	cryptotls "crypto/tls"
 	"errors"
 	"strings"
 	"testing"
@@ -81,7 +82,8 @@ func TestSMTPSendStops(t *testing.T) {
 		accepted int
 	}{
 		{"larger than SIZE", mailtest.Config{Size: 10}, nil, SMTPStageSize, 0, "", 0},
-		{"greeting refused", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy"}}, nil, SMTPStageConnect, 0, "", 0},
+		{"EHLO refused", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy"}}, nil, SMTPStageConnect, 451, "4.3.2", 0},
+		{"greeting refused", mailtest.Config{Replies: map[string]string{"GREETING": "421 4.3.2 try later"}}, nil, SMTPStageConnect, 421, "4.3.2", 0},
 		{"auth refused", mailtest.Config{Replies: map[string]string{"AUTH": "535 5.7.8 bad credentials"}}, nil, SMTPStageAuth, 535, "5.7.8", 0},
 		{"mail too large", mailtest.Config{Replies: map[string]string{"MAIL": "552 5.3.4 too big"}}, nil, SMTPStageMail, 552, "5.3.4", 0},
 		{"one recipient refused", mailtest.Config{Replies: map[string]string{"RCPT b@x.com": "550 5.1.1 b@x.com unknown"}}, nil, SMTPStageRcpt, 550, "5.1.1", 0},
@@ -103,6 +105,66 @@ func TestSMTPSendStops(t *testing.T) {
 			}
 		})
 	}
+
+	// STARTTLS refused with a reply keeps its codes; an untrusted certificate stays
+	// a connection failure with its cause.
+	t.Run("STARTTLS refused", func(t *testing.T) {
+		server := mailtest.Start(t, mailtest.Config{StartTLS: true, Replies: map[string]string{"STARTTLS": "454 4.7.0 TLS not available"}})
+		err := send(t, server, SMTPConnection{Security: model.EmailConnectionSecurityStartTLS, Password: "p"}, nil)
+		if st, code, enhanced := stage(err); st != SMTPStageConnect || code != 454 || enhanced != "4.7.0" {
+			t.Fatalf("err = %v (%s %d %s)", err, st, code, enhanced)
+		}
+	})
+	// net/smtp falls back to HELO after a refused EHLO and drops its reply; without
+	// extensions the send cannot go on, and the refusal of EHLO is what counts.
+	for _, tt := range []struct {
+		name       string
+		cfg        mailtest.Config
+		connection SMTPConnection
+		code       int
+		enhanced   string
+		stage      SMTPStage
+		supported  bool
+	}{
+		{"EHLO 4xx then HELO, no AUTH", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy", "HELO": "250 fake"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p"}, 451, "4.3.2", SMTPStageConnect, true},
+		{"EHLO 4xx then HELO, no STARTTLS", mailtest.Config{StartTLS: true, Replies: map[string]string{"EHLO": "451 4.3.2 busy", "HELO": "250 fake"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityStartTLS, Password: "p"}, 451, "4.3.2", SMTPStageConnect, true},
+		{"first EHLO 4xx, HELO, EHLO again with AUTH", mailtest.Config{Replies: map[string]string{"EHLO#1": "451 4.3.2 busy", "HELO": "250 fake"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p"}, 451, "4.3.2", SMTPStageConnect, true},
+		{"first EHLO 4xx, HELO, EHLO again with STARTTLS", mailtest.Config{StartTLS: true, Replies: map[string]string{"EHLO#1": "451 4.3.2 busy", "HELO": "250 fake"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityStartTLS, Password: "p"}, 451, "4.3.2", SMTPStageConnect, true},
+		{"EHLO 4xx then HELO refused", mailtest.Config{Replies: map[string]string{"EHLO": "451 4.3.2 busy", "HELO": "550 5.5.1 use EHLO"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p"}, 451, "4.3.2", SMTPStageConnect, true},
+		{"EHLO 5xx then HELO refused", mailtest.Config{Replies: map[string]string{"EHLO": "502 5.5.1 no EHLO", "HELO": "550 5.5.1 use EHLO"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p"}, 550, "5.5.1", SMTPStageConnect, true},
+		{"EHLO 5xx then HELO stays unsupported", mailtest.Config{Replies: map[string]string{"EHLO": "502 5.5.1 no EHLO", "HELO": "250 fake"}},
+			SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p"}, 0, "", SMTPStageAuth, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := mailtest.Start(t, tt.cfg)
+			err := send(t, server, tt.connection, nil)
+			var failure *SMTPSendError
+			if !errors.As(err, &failure) || failure.Stage != tt.stage || failure.Code != tt.code ||
+				failure.Enhanced != tt.enhanced || failure.Unsupported == tt.supported || strings.Contains(err.Error(), "busy") {
+				t.Fatalf("err = %v (%+v)", err, failure)
+			}
+		})
+	}
+
+	t.Run("untrusted certificate", func(t *testing.T) {
+		server := mailtest.Start(t, mailtest.Config{})
+		connection := SMTPConnection{Security: model.EmailConnectionSecurityTLS, Password: "p",
+			Host: server.Host, Port: server.Port, Username: "agent@example.org"}
+		sender := NewSMTPSender(SMTPSenderConfig{CommandTimeout: time.Second, DataTimeout: time.Second,
+			FinalReplyTimeout: time.Second, SendTimeout: 5 * time.Second})
+		err := sender.Send(context.Background(), connection, SMTPEnvelope{From: "agent@example.org", Recipients: []string{"a@x.com"}},
+			testEmail, func(context.Context) error { return nil })
+		var verify *cryptotls.CertificateVerificationError
+		if st, code, _ := stage(err); st != SMTPStageConnect || code != 0 || !errors.As(err, &verify) {
+			t.Fatalf("err = %v (%s %d)", err, st, code)
+		}
+	})
 
 	// A refused commit must not let the server see the final dot.
 	t.Run("commit refused leaves the body unfinished", func(t *testing.T) {
@@ -133,4 +195,28 @@ func TestSMTPSendStops(t *testing.T) {
 			t.Fatalf("err = %v, accepted %d", err, len(server.Accepted()))
 		}
 	})
+}
+
+func TestEHLORefusal(t *testing.T) {
+	for _, tt := range []struct {
+		replies  string
+		code     int
+		enhanced string
+	}{
+		{"451-4.3.2 busy\r\n451 4.3.2 later\r\n250 fake\r\n", 451, "4.3.2"},
+		{"421 4.3.2 closing\r\n", 421, "4.3.2"},
+		{"250-fake\r\n250 AUTH PLAIN\r\n", 0, ""},
+		{"502 5.5.1 no EHLO\r\n250 fake\r\n", 0, ""},
+		{"45", 0, ""},
+		{"", 0, ""},
+	} {
+		got := ehloRefusal([]byte(tt.replies))
+		code, enhanced := 0, ""
+		if got != nil {
+			code, enhanced = got.Code, enhancedCode.FindString(got.Msg)
+		}
+		if code != tt.code || enhanced != tt.enhanced {
+			t.Errorf("%q: %d %q", tt.replies, code, enhanced)
+		}
+	}
 }

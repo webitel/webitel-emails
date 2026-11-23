@@ -273,6 +273,28 @@ var WebitelAPI = WebitelServicesInfo{
 					},
 				},
 			},
+			"RetryEmailDelivery": WebitelMethod{
+				Access: 2,
+				Input:  "RetryEmailDeliveryRequest",
+				Output: "EmailDeliveryReceipt",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages/{message_id}/retry",
+						Method: "POST",
+					},
+				},
+			},
+			"CancelEmailDelivery": WebitelMethod{
+				Access: 2,
+				Input:  "CancelEmailDeliveryRequest",
+				Output: "EmailDeliveryReceipt",
+				HttpBindings: []*HttpBinding{
+					{
+						Path:   "/v1/email/threads/{thread_id}/messages/{message_id}/cancel",
+						Method: "POST",
+					},
+				},
+			},
 		},
 	},
 }

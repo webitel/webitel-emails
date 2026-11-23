@@ -46,6 +46,63 @@ func TestLoadServerConfigDefaults(t *testing.T) {
 	if cfg.Contacts.SearchTimeout != 5*time.Second || cfg.Contacts.MaxConcurrentSearches != 20 {
 		t.Errorf("contacts defaults = %+v", cfg.Contacts)
 	}
+	if got := cfg.Outbound.DeliveryRetryDelays; len(got) != 3 || got[0] != time.Minute ||
+		got[1] != 5*time.Minute || got[2] != 15*time.Minute || cfg.Outbound.DeliveryManualRetries != 1 {
+		t.Errorf("retry defaults = %v, %d", got, cfg.Outbound.DeliveryManualRetries)
+	}
+}
+
+func TestLoadServerConfigRetryDelays(t *testing.T) {
+	base := []string{
+		"--service.conn.verify_certs=false",
+		"--postgres.dsn=postgres://user:pass@localhost/webitel",
+		"--pubsub.url=amqp://user:pass@localhost/",
+	}
+	load := func(t *testing.T, yaml string, args ...string) *Config {
+		t.Helper()
+		if yaml != "" {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args = append(args, "--config_file="+path)
+		}
+		cfg, err := LoadServerConfig(append(append([]string{}, base...), args...))
+		if err != nil {
+			t.Fatalf("LoadServerConfig: %v", err)
+		}
+		return cfg
+	}
+
+	t.Run("environment", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		t.Setenv("OUTBOUND_DELIVERY_RETRY_DELAYS", "30s,2m")
+		t.Setenv("OUTBOUND_DELIVERY_MANUAL_RETRIES", "2")
+		cfg := load(t, "")
+		if got := cfg.Outbound.DeliveryRetryDelays; len(got) != 2 || got[0] != 30*time.Second || got[1] != 2*time.Minute ||
+			cfg.Outbound.DeliveryManualRetries != 2 {
+			t.Errorf("env = %v, %d", got, cfg.Outbound.DeliveryManualRetries)
+		}
+	})
+	t.Run("yaml list", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		cfg := load(t, "outbound:\n  delivery_retry_delays: [2m, 10m]\n")
+		if got := cfg.Outbound.DeliveryRetryDelays; len(got) != 2 || got[1] != 10*time.Minute {
+			t.Errorf("yaml = %v", got)
+		}
+	})
+	t.Run("yaml empty list turns retries off", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		if got := load(t, "outbound:\n  delivery_retry_delays: []\n").Outbound.DeliveryRetryDelays; len(got) != 0 {
+			t.Errorf("yaml [] = %v", got)
+		}
+	})
+	t.Run("empty flag turns retries off", func(t *testing.T) {
+		clearConfigEnvironment(t)
+		if got := load(t, "", "--outbound.delivery_retry_delays=").Outbound.DeliveryRetryDelays; len(got) != 0 {
+			t.Errorf("flag = %v", got)
+		}
+	})
 }
 
 func TestLoadServerConfigPrecedence(t *testing.T) {
@@ -228,6 +285,7 @@ func TestConfigValidate(t *testing.T) {
 			DeliveryTickInterval: time.Second, MaxConcurrentDeliveries: 8, MaxDeliveriesPerProfile: 2,
 			SMTPCommandTimeout: time.Minute, SMTPDataTimeout: 3 * time.Minute, SMTPFinalReplyTimeout: 10 * time.Minute,
 			DeliverySendTimeout: 15 * time.Minute, DeliveryLease: 20 * time.Minute, DeliveryRecoveryInterval: time.Minute,
+			DeliveryRetryDelays: []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}, DeliveryManualRetries: 1,
 		},
 	}
 
@@ -256,6 +314,16 @@ func TestConfigValidate(t *testing.T) {
 		{name: "outbound attachment at the int64 limit", mutate: func(c *Config) { c.Outbound.MaxAttachmentSize = math.MaxInt64 }, wantErr: "service.max_recv_msg_size"},
 		{name: "delivery lease shorter than a send", mutate: func(c *Config) { c.Outbound.DeliveryLease = 15 * time.Minute }, wantErr: "delivery_lease"},
 		{name: "outbound attachments above the message limit", mutate: func(c *Config) { c.Outbound.MaxMessageSize = 10 << 20 }, wantErr: "max_message_size"},
+		{name: "no retry delays", mutate: func(c *Config) { c.Outbound.DeliveryRetryDelays = nil }},
+		{name: "zero retry delay", mutate: func(c *Config) { c.Outbound.DeliveryRetryDelays = []time.Duration{0} }, wantErr: "delivery_retry_delays"},
+		{name: "retry delay above a day", mutate: func(c *Config) { c.Outbound.DeliveryRetryDelays = []time.Duration{25 * time.Hour} }, wantErr: "delivery_retry_delays"},
+		{name: "decreasing retry delays", mutate: func(c *Config) { c.Outbound.DeliveryRetryDelays = []time.Duration{5 * time.Minute, time.Minute} }, wantErr: "delivery_retry_delays"},
+		{name: "too many retry delays", mutate: func(c *Config) { c.Outbound.DeliveryRetryDelays = make([]time.Duration, 11) }, wantErr: "at most 10"},
+		{name: "ten equal retry delays", mutate: func(c *Config) {
+			c.Outbound.DeliveryRetryDelays = []time.Duration{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+		}},
+		{name: "negative manual retries", mutate: func(c *Config) { c.Outbound.DeliveryManualRetries = -1 }, wantErr: "delivery_manual_retries"},
+		{name: "too many manual retries", mutate: func(c *Config) { c.Outbound.DeliveryManualRetries = 4 }, wantErr: "delivery_manual_retries"},
 	}
 
 	for _, tt := range tests {
@@ -290,6 +358,8 @@ func clearConfigEnvironment(t *testing.T) {
 		"SERVICE_CONN_CLIENT_CERT",
 		"SERVICE_CONN_CLIENT_KEY",
 		"OAUTH_REDIRECT_URL",
+		"OUTBOUND_DELIVERY_RETRY_DELAYS",
+		"OUTBOUND_DELIVERY_MANUAL_RETRIES",
 		"LOG_LEVEL",
 		"LOG_JSON",
 		"LOG_OTEL",

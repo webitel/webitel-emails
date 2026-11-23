@@ -19,7 +19,12 @@ SELECT m.id, m.thread_id, m.profile_id, m.direction, m.kind, m.message_id,
     m.bounce_original_message_id, m.bounce_recipient, m.bounce_status, m.bounce_diagnostic_code,
     m.sent_at, m.received_at, m.delivery_status, m.request_fingerprint,
     m.author_user_id, coalesce(nullif(au.name, ''), au.username::text, '') AS author_name,
-    m.delivery_error_code, m.delivered_at
+    m.delivery_error_code, m.delivered_at, m.delivery_version, m.delivery_retry_at,
+    m.delivery_manual_retry_count,
+    -- The reply rule of SendEmailReply, without the attempt the client holds; a
+    -- Thread without an agent would make it NULL.
+    coalesce((t.current_user_id = @user_id AND t.status = 'in_progress')
+        OR (t.status = 'processed' AND t.current_user_id IS NULL AND ` + threadParticipant + `), false) AS reply_allowed
 FROM email.message m
 JOIN email.thread t ON t.domain_id = m.domain_id AND t.id = m.thread_id
 LEFT JOIN directory.wbt_user au ON au.dc = m.domain_id AND au.id = m.author_user_id
@@ -120,6 +125,7 @@ func (s *emailThreadReadStore) LocateMessageByRequest(
     AND m.author_user_id = @author_id AND m.request_id = @request_id`, pgx.NamedArgs{
 		"domain_id":  domainID,
 		"author_id":  authorID,
+		"user_id":    authorID,
 		"request_id": requestID,
 	})
 	if err != nil || len(records) == 0 {
@@ -273,25 +279,33 @@ type emailMessageViewRecord struct {
 	AuthorName              string     `db:"author_name"`
 	DeliveryErrorCode       *string    `db:"delivery_error_code"`
 	DeliveredAt             *time.Time `db:"delivered_at"`
+	DeliveryVersion         int64      `db:"delivery_version"`
+	DeliveryRetryAt         *time.Time `db:"delivery_retry_at"`
+	DeliveryManualRetries   int        `db:"delivery_manual_retry_count"`
+	ReplyAllowed            bool       `db:"reply_allowed"`
 }
 
 func (r *emailMessageViewRecord) toModel() *model.EmailMessageView {
 	view := &model.EmailMessageView{
-		ID:                r.ID,
-		ThreadID:          r.ThreadID,
-		ProfileID:         r.ProfileID,
-		Direction:         model.EmailMessageDirection(r.Direction),
-		Kind:              model.EmailKind(r.Kind),
-		InternetMessageID: r.MessageID,
-		InReplyTo:         r.InReplyTo,
-		Subject:           r.Subject,
-		SentAt:            r.SentAt,
-		ReceivedAt:        r.ReceivedAt,
-		BodyText:          r.BodyText,
-		RawHTML:           r.BodyHTML,
-		DeliveryStatus:    model.EmailDeliveryStatus(derefString(r.DeliveryStatus)),
-		DeliveryErrorCode: model.EmailDeliveryError(derefString(r.DeliveryErrorCode)),
-		DeliveredAt:       r.DeliveredAt,
+		ID:                    r.ID,
+		ThreadID:              r.ThreadID,
+		ProfileID:             r.ProfileID,
+		Direction:             model.EmailMessageDirection(r.Direction),
+		Kind:                  model.EmailKind(r.Kind),
+		InternetMessageID:     r.MessageID,
+		InReplyTo:             r.InReplyTo,
+		Subject:               r.Subject,
+		SentAt:                r.SentAt,
+		ReceivedAt:            r.ReceivedAt,
+		BodyText:              r.BodyText,
+		RawHTML:               r.BodyHTML,
+		DeliveryStatus:        model.EmailDeliveryStatus(derefString(r.DeliveryStatus)),
+		DeliveryErrorCode:     model.EmailDeliveryError(derefString(r.DeliveryErrorCode)),
+		DeliveryVersion:       r.DeliveryVersion,
+		DeliveryRetryAt:       r.DeliveryRetryAt,
+		DeliveryManualRetries: r.DeliveryManualRetries,
+		ReplyAllowed:          r.ReplyAllowed,
+		DeliveredAt:           r.DeliveredAt,
 	}
 	if r.AuthorUserID != nil {
 		view.Author = &model.Lookup{ID: *r.AuthorUserID, Name: r.AuthorName}

@@ -284,6 +284,7 @@ func start(t *testing.T, links linker) harness {
 		readService,
 		service.NewEmailAttachmentUploadService(outboundCfg, uploader{}, uploadStore{}),
 		service.NewEmailSendService(outboundCfg, sent, readService, senderProfiles{}, contacts{}),
+		nil,
 	))
 
 	listener := bufconn.Listen(1 << 20)

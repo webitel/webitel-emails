@@ -115,3 +115,7 @@ outbound:
   delivery_send_timeout: 15m
   delivery_lease: 20m
   delivery_recovery_interval: 1m
+  # Pauses before the automatic retries of a series; [] turns them off (an
+  # empty environment variable keeps the default).
+  delivery_retry_delays: [1m, 5m, 15m]
+  delivery_manual_retries: 1

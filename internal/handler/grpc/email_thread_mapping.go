@@ -205,6 +205,13 @@ func emailMessageToProto(message *model.EmailMessageView) *emailpb.EmailMessage 
 		DeliveryErrorCode:    deliveryErrors[message.DeliveryErrorCode].code,
 		DeliveryError:        deliveryErrors[message.DeliveryErrorCode].text,
 		DeliveredAt:          unixMilliValue(message.DeliveredAt),
+		DeliveryVersion:      message.DeliveryVersion,
+		ManualRetryAvailable: message.ManualRetryAvailable,
+	}
+	// Only while pending: a retry scheduled or, once past, maybe already running.
+	if message.DeliveryStatus == model.EmailDeliveryStatusPending && message.DeliveryRetryAt != nil {
+		retryAt := unixMilli(*message.DeliveryRetryAt)
+		out.DeliveryRetryAt = &retryAt
 	}
 	if bounce := message.Bounce; bounce != nil {
 		out.Bounce = &emailpb.EmailBounce{
@@ -234,9 +241,10 @@ func emailMessageToProto(message *model.EmailMessageView) *emailpb.EmailMessage 
 }
 
 var deliveryStatusToProto = map[model.EmailDeliveryStatus]emailpb.EmailDeliveryStatus{
-	model.EmailDeliveryStatusPending: emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING,
-	model.EmailDeliveryStatusSent:    emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_SENT,
-	model.EmailDeliveryStatusFailed:  emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_FAILED,
+	model.EmailDeliveryStatusPending:   emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_PENDING,
+	model.EmailDeliveryStatusSent:      emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_SENT,
+	model.EmailDeliveryStatusFailed:    emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_FAILED,
+	model.EmailDeliveryStatusCancelled: emailpb.EmailDeliveryStatus_EMAIL_DELIVERY_STATUS_CANCELLED,
 }
 
 var contactModeFromProto = map[emailpb.EmailContactMode]service.ContactMode{
